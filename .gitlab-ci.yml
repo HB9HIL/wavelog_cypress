@@ -6,17 +6,23 @@ stages:
 
 prepare:
   stage: prepare
+  tags:
+    - shell
   script:
     - curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz | tar xz --strip-components=1
     - npm install
 
 build:
   stage: build
+  tags:
+    - shell
   script:
     - docker compose -f cypress_testserver.yml up -d 
 
 test:
   stage: test
+  tags:
+    - shell
   script:
     - npx cypress run
   artifacts:
@@ -28,5 +34,7 @@ test:
 
 destroy:
   stage: destroy
+  tags:
+    - shell
   script:
     - docker compose -f cypress_testserver.yml down
