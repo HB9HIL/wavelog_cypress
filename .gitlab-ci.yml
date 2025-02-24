@@ -7,9 +7,7 @@ stages:
 prepare:
   stage: prepare
   script:
-    - git remote add upstream https://github.com/wavelog/wavelog.git
-    - git fetch upstream
-    - git merge upstream/dev
+    - curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz | tar xz --strip-components=1
     - npm install
 
 build:
