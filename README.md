@@ -1,5 +1,7 @@
 ## Cypress Testing for https://github.com/wavelog/wavelog
 
+This pipeline gets triggered by a webhook
+
 # Requirements:
 
 - Node.js
