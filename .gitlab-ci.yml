@@ -1,5 +1,4 @@
 stages:
-  - prepare
   - build
   - test
   - destroy
@@ -8,25 +7,20 @@ default:
   tags:
     - cypress
 
-prepare:
-  stage: prepare
+build:
+  stage: build
   script:
     - curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz | tar xz --strip-components=1
     - npm install
+    - docker compose -f cypress_testserver.yml up -d 
   artifacts:
     paths:
       - node_modules/
     expire_in: 7 day
 
-build:
-  stage: build
-  script:
-    - docker compose -f cypress_testserver.yml up -d 
-
 test:
   stage: test
   dependencies:
-    - prepare
     - build
   script:
     - npx cypress run
