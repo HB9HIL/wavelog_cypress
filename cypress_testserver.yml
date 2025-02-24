@@ -9,7 +9,7 @@ services:
     depends_on:
       - wavelog-db
     networks:
-      - mynet
+      - wavelog_testnet
 
   wavelog-db:
     image: mariadb:latest
