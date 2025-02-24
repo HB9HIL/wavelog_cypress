@@ -1,13 +1,11 @@
 networks:
-  mynet:
+  wavelog_testnet:
 
 services:
-  web:
+  wavelog-web:
     build: .
     ports:
       - "8087:80"
-    volumes:
-      - wavelog_data:/var/www/html
     depends_on:
       - wavelog-db
     networks:
@@ -21,10 +19,5 @@ services:
       MARIADB_DATABASE: wavelog
       MARIADB_USER: wavelog
       MARIADB_PASSWORD: wavelog
-    volumes:
-      - db_data:/var/lib/mysql
     networks:
-      - mynet
-volumes:
-  wavelog_data:
-  db_data: {}
+      - wavelog_testnet
