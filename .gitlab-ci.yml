@@ -15,18 +15,17 @@ concurrency_check:
     - docker
   script:
     - |
-      echo "Überprüfe, ob bereits eine Pipeline auf Branch '${CI_COMMIT_REF_NAME}' läuft..."
+      echo "Check for other pipelines"
       RUNNING=$(curl --silent --header "PRIVATE-TOKEN: $API_TOKEN" \
         "https://git.hb9hil.org/api/v4/projects/${CI_PROJECT_ID}/pipelines?ref=${CI_COMMIT_REF_NAME}&status=running" \
         | jq '. | length')
-      echo "Laufende Pipelines auf diesem Branch: ${RUNNING}"
 
       if [ "${RUNNING}" -gt 1 ]; then
-        echo "Es existiert bereits eine Pipeline auf diesem Branch. Breche diese hier ab..."
+        echo "There is another pipeline. Cancelling this one"
         curl --silent --request POST --header "PRIVATE-TOKEN: $API_TOKEN" \
           "https://git.hb9hil.org/api/v4/projects/${CI_PROJECT_ID}/pipelines/${CI_PIPELINE_ID}/cancel"
       else
-        echo "Keine andere Pipeline läuft. Mache normal weiter..."
+        echo "No other pipelines. Continue.."
       fi
 
 build:
