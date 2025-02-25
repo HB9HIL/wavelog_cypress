@@ -10,9 +10,6 @@ default:
 
 concurrency_check:
   stage: concurrency_check
-  image: reg.git.hb9hil.org/hb9hil/runner_image:latest
-  tags: 
-    - docker
   script:
     - |
       echo "Check for other pipelines"
