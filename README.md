@@ -37,3 +37,4 @@ npx cypress open
 ```bash
 docker compose -f cypress_testserver.yml down
 ```
+
