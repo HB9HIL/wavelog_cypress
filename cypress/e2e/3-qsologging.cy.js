@@ -87,7 +87,8 @@ describe("QSO Live Logging", () => {
 			.should('contain.text', 'worked before')
 			.wait(300)
 			.get('button[id="saveQso"]')
-			.click();
+			.click()
+			.wait(500);
 
 		// Check if the QSO has been saved
 		cy.get('body')
