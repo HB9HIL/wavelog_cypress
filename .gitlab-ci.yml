@@ -37,7 +37,8 @@ build:
   artifacts:
     paths:
       - node_modules/
-    expire_in: 7 day
+    expire_in: 1 week
+    when: always
 
 test:
   stage: test
@@ -52,7 +53,7 @@ test:
     paths:
       - cypress/screenshots/**/*.png
       - cypress/videos/**/*.mp4
-    expire_in: 4 week
+    expire_in: 1 week
 
 destroy:
   stage: destroy
