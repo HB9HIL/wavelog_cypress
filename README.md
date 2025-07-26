@@ -43,4 +43,3 @@ docker compose -f cypress_testserver.yml down
 rm -rf /tmp/wavelog-${CI_PIPELINE_ID}
 docker image rm wavelog-web:${CI_PIPELINE_ID}
 ```
-
