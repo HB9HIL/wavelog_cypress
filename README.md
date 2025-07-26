@@ -18,7 +18,11 @@ sudo apt install -y libatk1.0-0 libatk-bridge2.0-0 libgtk-3-0 libx11-xcb1 libxcb
 
 # Prepare:
 ```bash
-curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz | tar xz --strip-components=1 -C ./wavelog
+# Set manually a random Pipeline ID
+export CI_PIPELINE_ID=26328
+mkdir -p /tmp/wavelog-${CI_PIPELINE_ID}
+curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz | tar xz --strip-components=1 -C /tmp/wavelog-${CI_PIPELINE_ID}
+docker compose -f cypress_testserver.yml build
 docker compose -f cypress_testserver.yml up -d
 npm install
 ```
@@ -36,4 +40,6 @@ npx cypress open
 # Destroy after test
 ```bash
 docker compose -f cypress_testserver.yml down
+rm -rf /tmp/wavelog-${CI_PIPELINE_ID}
+docker image rm wavelog-web:${CI_PIPELINE_ID}
 ```

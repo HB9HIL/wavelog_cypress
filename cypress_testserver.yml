@@ -4,7 +4,8 @@ networks:
 
 services:
   wavelog-web:
-    build: ./wavelog  # <- Bleibt fest
+    build: /tmp/wavelog-${CI_PIPELINE_ID}
+    image: wavelog-web:${CI_PIPELINE_ID}
     ports:
       - "${CI_PIPELINE_ID}:80"
     container_name: wavelog-web-${CI_PIPELINE_ID}
