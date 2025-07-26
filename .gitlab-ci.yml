@@ -33,17 +33,13 @@ build:
     - curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz | tar xz --strip-components=1 -C ./wavelog
     - npm install
     - docker compose -f cypress_testserver.yml up -d 
-  artifacts:
-    paths:
-      - node_modules/
-    expire_in: 1 week
-    when: on_failure
 
 test:
   stage: test
   dependencies:
     - build
   script:
+    - npm install
     - export CYPRESS_baseUrl="http://localhost:${CI_PIPELINE_ID}/"
     - npx cypress run
   artifacts:
