@@ -18,7 +18,8 @@ sudo apt install -y libatk1.0-0 libatk-bridge2.0-0 libgtk-3-0 libx11-xcb1 libxcb
 # Prepare:
 ```bash
 # Set manually a random Pipeline ID
-export CI_PIPELINE_ID=26328
+export CI_PIPELINE_ID=$((RANDOM + 10000))
+echo "Using Pipeline ID: $CI_PIPELINE_ID"
 
 # Download and extract Wavelog
 mkdir -p /tmp/wavelog-${CI_PIPELINE_ID}
