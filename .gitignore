@@ -1,1 +1,6 @@
-./wavelog/*
+wavelog/*
+node_modules/*
+cypress/screenshots/*
+cypress/videos/*
+cypress/fixtures/*
+results/*
