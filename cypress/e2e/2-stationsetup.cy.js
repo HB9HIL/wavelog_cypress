@@ -109,7 +109,8 @@ describe("Station Setup", () => {
 		// and save it
 		cy.get('button')
 			.contains("Save")
-			.click();
+			.click()
+			.wait(1000);
 
 		// The second logbook should appear in the list now
 		cy.get('body')
