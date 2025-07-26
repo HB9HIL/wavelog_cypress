@@ -18,7 +18,7 @@ sudo apt install -y libatk1.0-0 libatk-bridge2.0-0 libgtk-3-0 libx11-xcb1 libxcb
 
 # Prepare:
 ```bash
-curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz | tar xz --strip-components=1
+curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz | tar xz --strip-components=1 -C ./wavelog
 docker compose -f cypress_testserver.yml up -d
 npm install
 ```

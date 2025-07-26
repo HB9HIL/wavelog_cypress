@@ -3,7 +3,7 @@ networks:
 
 services:
   wavelog-web:
-    build: .
+    build: ./wavelog
     ports:
       - "8087:80"
     depends_on:
