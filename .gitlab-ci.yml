@@ -30,6 +30,8 @@ build:
         --network wavelog_testnet_${CI_PIPELINE_ID} \
         -p $((8000 + (${CI_PIPELINE_ID} % 1000))):80 \
         wavelog-web:${CI_PIPELINE_ID}
+    - |
+      echo "Wavelog is running on: http://localhost:$((8000 + (${CI_PIPELINE_ID} % 1000)))/"
 
 test:
   stage: test
