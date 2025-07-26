@@ -48,6 +48,9 @@ docker run -d \
 
 # Install npm dependencies
 npm install
+
+# Show the final port
+echo "Wavelog is running on: http://localhost:$((8000 + (${CI_PIPELINE_ID} % 1000)))/"
 ```
 
 # Run:
