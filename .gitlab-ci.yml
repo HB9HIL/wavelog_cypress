@@ -47,7 +47,7 @@ test:
   script:
     - npx cypress run
   artifacts:
-    when: always
+    when: on_failure
     reports:
       junit: results/junit-*.xml
     paths:
