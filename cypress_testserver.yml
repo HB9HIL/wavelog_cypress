@@ -1,19 +1,21 @@
 networks:
   wavelog_testnet:
+    name: wavelog_testnet_${CI_PIPELINE_ID}
 
 services:
   wavelog-web:
-    build: ./wavelog
+    build: ./wavelog  # <- Bleibt fest
     ports:
-      - "8087:80"
+      - "${CI_PIPELINE_ID}:80"
+    container_name: wavelog-web-${CI_PIPELINE_ID}
     depends_on:
       - wavelog-db
     networks:
       - wavelog_testnet
 
   wavelog-db:
-    image: mariadb:latest
-    container_name: wavelog-db
+    container_name: wavelog-db-${CI_PIPELINE_ID}
+    image: mariadb:11.3
     environment:
       MARIADB_RANDOM_ROOT_PASSWORD: yes
       MARIADB_DATABASE: wavelog

@@ -31,20 +31,21 @@ build:
   #   - concurrency_check
   script:
     - if [ "$CI_PIPELINE_SOURCE" = "trigger" ]; then echo "Triggered via trigger token API, waiting 2 minutes..."; sleep 120; fi
-    - curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz | tar xz --strip-components=1
+    - curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz | tar xz --strip-components=1 -C ./wavelog
     - npm install
     - docker compose -f cypress_testserver.yml up -d 
   artifacts:
     paths:
       - node_modules/
     expire_in: 1 week
-    when: always
+    when: on_failure
 
 test:
   stage: test
   dependencies:
     - build
   script:
+    - export CYPRESS_baseUrl="http://localhost:${CI_PIPELINE_ID}/"
     - npx cypress run
   artifacts:
     when: on_failure
