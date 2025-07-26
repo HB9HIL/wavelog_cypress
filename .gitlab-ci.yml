@@ -1,5 +1,4 @@
 stages:
-  # - concurrency_check
   - build
   - test
   - destroy
@@ -8,32 +7,32 @@ default:
   tags:
     - cypress
 
-# concurrency_check:
-#   stage: concurrency_check
-#   script:
-#     - |
-#       echo "Check for other pipelines"
-#       RUNNING=$(curl --silent --header "PRIVATE-TOKEN: $API_TOKEN" \
-#         "https://git.berg-systems.ch/api/v4/projects/${CI_PROJECT_ID}/pipelines?ref=${CI_COMMIT_REF_NAME}&status=running" \
-#         | jq '. | length')
-#
-#       if [ "${RUNNING}" -gt 1 ]; then
-#         echo "There is another pipeline. Cancelling this one"
-#         curl --silent --request POST --header "PRIVATE-TOKEN: $API_TOKEN" \
-#           "https://git.berg-systems.ch/api/v4/projects/${CI_PROJECT_ID}/pipelines/${CI_PIPELINE_ID}/cancel"
-#       else
-#         echo "No other pipelines. Continue.."
-#       fi
-
 build:
   stage: build
-  # dependencies:
-  #   - concurrency_check
   script:
     - mkdir -p /tmp/wavelog-${CI_PIPELINE_ID}
     - curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz | tar xz --strip-components=1 -C /tmp/wavelog-${CI_PIPELINE_ID}
-    - docker compose -f cypress_testserver.yml build
-    - docker compose -f cypress_testserver.yml up -d 
+    # Netzwerk erstellen
+    - docker network create wavelog_testnet_${CI_PIPELINE_ID}
+    # DB Container starten
+    - |
+      docker run -d \
+        --name wavelog-db-${CI_PIPELINE_ID} \
+        --network wavelog_testnet_${CI_PIPELINE_ID} \
+        --network-alias wavelog-db \
+        -e MARIADB_RANDOM_ROOT_PASSWORD=yes \
+        -e MARIADB_DATABASE=wavelog \
+        -e MARIADB_USER=wavelog \
+        -e MARIADB_PASSWORD=wavelog \
+        mariadb:11.3
+    # Web Container bauen und starten
+    - docker build -t wavelog-web:${CI_PIPELINE_ID} /tmp/wavelog-${CI_PIPELINE_ID}
+    - |
+      docker run -d \
+        --name wavelog-web-${CI_PIPELINE_ID} \
+        --network wavelog_testnet_${CI_PIPELINE_ID} \
+        -p $((8000 + (${CI_PIPELINE_ID} % 1000))):80 \
+        wavelog-web:${CI_PIPELINE_ID}
 
 test:
   stage: test
@@ -41,7 +40,7 @@ test:
     - build
   script:
     - npm install
-    - export CYPRESS_baseUrl="http://localhost:${CI_PIPELINE_ID}/"
+    - export CYPRESS_baseUrl="http://localhost:$((8000 + (${CI_PIPELINE_ID} % 1000)))/"
     - npx cypress run
   artifacts:
     when: on_failure
@@ -55,5 +54,9 @@ test:
 destroy:
   stage: destroy
   script:
-    - docker compose -f cypress_testserver.yml down
+    - docker stop wavelog-web-${CI_PIPELINE_ID} wavelog-db-${CI_PIPELINE_ID} || true
+    - docker rm wavelog-web-${CI_PIPELINE_ID} wavelog-db-${CI_PIPELINE_ID} || true
+    - docker rmi wavelog-web:${CI_PIPELINE_ID} || true
+    - docker network rm wavelog_testnet_${CI_PIPELINE_ID} || true
+    - rm -rf /tmp/wavelog-${CI_PIPELINE_ID}
   when: always
