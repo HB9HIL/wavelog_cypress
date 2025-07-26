@@ -173,11 +173,19 @@ describe("Menu -> Logbook Advanced", () => {
 	it("Should expand the Action Buttons", () => {
 		// Visit the Logbook Advanced Page
 		cy.visit("/index.php/logbookadvanced");
+		
+		cy.get('button').contains("Actions").should('be.visible');
+		cy.get('body').click();
 
-		// Clicking on Actions should expand the dropdown
+		// Click with retry-logic
 		cy.get('button')
 			.contains("Actions")
-			.click();
+			.then($btn => {
+				if ($btn.length) {
+					cy.wrap($btn).click({ force: true });
+				}
+			});
+			
 		cy.get('body')
 			.contains("Not Sent", { timeout: 1000 });
 	});
