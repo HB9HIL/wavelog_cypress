@@ -16,7 +16,7 @@ default:
 #       RUNNING=$(curl --silent --header "PRIVATE-TOKEN: $API_TOKEN" \
 #         "https://git.berg-systems.ch/api/v4/projects/${CI_PROJECT_ID}/pipelines?ref=${CI_COMMIT_REF_NAME}&status=running" \
 #         | jq '. | length')
-
+#
 #       if [ "${RUNNING}" -gt 1 ]; then
 #         echo "There is another pipeline. Cancelling this one"
 #         curl --silent --request POST --header "PRIVATE-TOKEN: $API_TOKEN" \
