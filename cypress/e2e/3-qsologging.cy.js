@@ -85,14 +85,15 @@ describe("QSO Live Logging", () => {
 			.blur();
 		cy.get('#timesWorked')
 			.should('contain.text', 'worked before')
-			.wait(300)
+			.wait(1000)
 			.get('button[id="saveQso"]')
 			.click()
-			.wait(500);
+			.wait(1000);
 
 		// Check if the QSO has been saved
 		cy.get('body')
-			.contains("QSO Added");
+			.contains("was added to logbook")
+			.should("be.visible", { timeout: 1000 });
 	});
 
 	it("Log a second QSO to check if worked before", () => {
