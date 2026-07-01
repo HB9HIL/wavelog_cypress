@@ -2,5 +2,6 @@ node_modules/*
 cypress/screenshots/*
 cypress/videos/*
 cypress/fixtures/*
+!cypress/fixtures/import_test.adi
 results/*
 .DS_Store
