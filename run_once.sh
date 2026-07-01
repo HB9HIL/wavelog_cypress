@@ -17,15 +17,26 @@ curl -L https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz | tar xz 
 # Create Docker network
 docker network create wavelog_testnet_${CI_PIPELINE_ID}
 
+if [[ $DATABASE == mariadb* ]]; then
+  echo "Using MariaDB database"
+  DB_CMD="MARIADB"
+elif [[ $DATABASE == mysql* ]]; then
+  echo "Using MySQL database"
+  DB_CMD="MYSQL"
+else
+  echo "Unsupported database: $DATABASE"
+  exit 1
+fi
+
 # Start database container
 docker run -d \
   --name wavelog-db-${CI_PIPELINE_ID} \
   --network wavelog_testnet_${CI_PIPELINE_ID} \
   --network-alias wavelog-db \
-  -e MARIADB_RANDOM_ROOT_PASSWORD=yes \
-  -e MARIADB_DATABASE=wavelog \
-  -e MARIADB_USER=wavelog \
-  -e MARIADB_PASSWORD=wavelog \
+  -e ${DB_CMD}_RANDOM_ROOT_PASSWORD=yes \
+  -e ${DB_CMD}_DATABASE=wavelog \
+  -e ${DB_CMD}_USER=wavelog \
+  -e ${DB_CMD}_PASSWORD=wavelog \
   ${DATABASE}
 
 # Build and start web container
@@ -37,7 +48,7 @@ docker run -d \
   wavelog-web:${CI_PIPELINE_ID}
 
 # Install npm dependencies
-npm install
+npm ci
 
 # Show the final port
 echo "Wavelog is running on: http://localhost:$((8000 + (${CI_PIPELINE_ID} % 1000)))/"
