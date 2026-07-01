@@ -9,6 +9,8 @@ default:
 
 build:
   stage: build
+  tags:
+    - shell
   script:
     - mkdir -p /tmp/wavelog-${CI_PIPELINE_ID}
     - curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz | tar xz --strip-components=1 -C /tmp/wavelog-${CI_PIPELINE_ID}
@@ -22,7 +24,7 @@ build:
         -e MARIADB_DATABASE=wavelog \
         -e MARIADB_USER=wavelog \
         -e MARIADB_PASSWORD=wavelog \
-        mariadb:11.3
+        mariadb:11.8
     - docker build -t wavelog-web:${CI_PIPELINE_ID} /tmp/wavelog-${CI_PIPELINE_ID}
     - |
       docker run -d \
@@ -35,6 +37,8 @@ build:
 
 test:
   stage: test
+  tags:
+    - shell
   dependencies:
     - build
   script:
@@ -52,6 +56,8 @@ test:
 
 destroy:
   stage: destroy
+  tags:
+    - shell
   script:
     - docker stop wavelog-web-${CI_PIPELINE_ID} wavelog-db-${CI_PIPELINE_ID} || true
     - docker rm wavelog-web-${CI_PIPELINE_ID} wavelog-db-${CI_PIPELINE_ID} || true
