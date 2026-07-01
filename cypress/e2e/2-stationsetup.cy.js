@@ -45,7 +45,7 @@ describe("Station Setup", () => {
 
 		// Wait until the modal pops up
 		cy.get("#NewStationLogbookModal_title", { timeout: 2000 })
-			.contains("Edit visitor link")
+			.contains("Edit Visitor Link")
 			.should("be.visible");
 
 		// set the public slug

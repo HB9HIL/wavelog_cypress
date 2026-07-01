@@ -117,7 +117,7 @@ describe("QSO Live Logging", () => {
 
 		// Check if the QSO has been saved
 		cy.get('body')
-			.contains("QSO Added");
+			.contains("was added to logbook");
 	});
 
 	it("Check if the QSO is shown in latest Contacts", () => {
@@ -268,18 +268,33 @@ describe("Live Contest Logging", () => {
 		});
 	});
 
-	it("Call Contest live logging page", () => {
-		// Visit the QSO Live Logging Page
-		cy.visit("/index.php/contesting?manual=0");
+	it("Should show the Contest Management dashboard", () => {
+		// The contesting entry point is now a management dashboard
+		cy.visit("/index.php/contesting");
 
-		// Make sure we see the Contest Logging form
-		cy.get("#callsign")
+		// The dashboard offers a Quick Start button to launch a session
+		cy.get('a[href*="contesting/quickstart"]')
+			.should("be.visible")
+			.and("contain.text", "Quick Start");
+	});
+
+	it("Should open the contest logging engine", () => {
+		// Quick Start creates a session and redirects to the logging engine
+		cy.visit("/index.php/contesting/quickstart");
+
+		// We should end up on the logging engine
+		cy.url().should("include", "/contesting/logging_engine/");
+
+		// Wait until the JS engine finished loading (loading screen gets removed)
+		cy.get("#contest-loading-screen", { timeout: 20000 })
+			.should("not.exist");
+
+		// Make sure we see the QSO logging form
+		cy.get("#qso-callsign", { timeout: 10000 })
 			.should("be.visible");
-		cy.get("#contestname_select")
+		cy.get("#qso-rst-sent")
 			.should("be.visible");
-		cy.get("#rst_sent")
-			.should("be.visible");
-		cy.get('button[onclick="logQso();"]')
+		cy.get("#qso-rst-received")
 			.should("be.visible");
 	});
 
