@@ -10,7 +10,6 @@ default:
 # Database matrix, shared by build/test/destroy via YAML anchor.
 # PORT_OFFSET keeps host ports unique so all combos can run in parallel.
 .db_matrix: &db_matrix
-  - { DB_SLUG: "mariadb-10-6",  DB_IMAGE: "mariadb:10.6",  DB_VENDOR: "mariadb", PORT_OFFSET: "0"  }
   - { DB_SLUG: "mariadb-10-11", DB_IMAGE: "mariadb:10.11", DB_VENDOR: "mariadb", PORT_OFFSET: "10" }
   - { DB_SLUG: "mariadb-11-4",  DB_IMAGE: "mariadb:11.4",  DB_VENDOR: "mariadb", PORT_OFFSET: "20" }
   - { DB_SLUG: "mariadb-11-8",  DB_IMAGE: "mariadb:11.8",  DB_VENDOR: "mariadb", PORT_OFFSET: "30" }
