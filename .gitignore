@@ -3,3 +3,4 @@ cypress/screenshots/*
 cypress/videos/*
 cypress/fixtures/*
 results/*
+.DS_Store
