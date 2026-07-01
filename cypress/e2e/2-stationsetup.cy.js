@@ -49,8 +49,13 @@ describe("Station Setup", () => {
 			.should("be.visible");
 
 		// set the public slug
+		// Assert the full value landed before saving. On slow CI the modal
+		// input is still being rendered/bound, so .type() can drop characters
+		// (e.g. "cypre") and Save would fire mid-typing.
 		cy.get('input[id="publicSlugInput"]')
-			.type(env_stationsetup.public_slug);
+			.clear()
+			.type(env_stationsetup.public_slug)
+			.should('have.value', env_stationsetup.public_slug);
 
 		// and save it
 		cy.get('button')
