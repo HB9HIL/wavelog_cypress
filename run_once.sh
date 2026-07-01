@@ -4,9 +4,15 @@
 export CI_PIPELINE_ID=$((RANDOM + 10000))
 echo "Using Pipeline ID: $CI_PIPELINE_ID"
 
+############################
+REPO="wavelog/wavelog"
+BRANCH="dev"
+DATABASE="mariadb:11.8"
+############################
+
 # Download and extract Wavelog
 mkdir -p /tmp/wavelog-${CI_PIPELINE_ID}
-curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz | tar xz --strip-components=1 -C /tmp/wavelog-${CI_PIPELINE_ID}
+curl -L https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz | tar xz --strip-components=1 -C /tmp/wavelog-${CI_PIPELINE_ID}
 
 # Create Docker network
 docker network create wavelog_testnet_${CI_PIPELINE_ID}
@@ -20,7 +26,7 @@ docker run -d \
   -e MARIADB_DATABASE=wavelog \
   -e MARIADB_USER=wavelog \
   -e MARIADB_PASSWORD=wavelog \
-  mariadb:11.3
+  ${DATABASE}
 
 # Build and start web container
 docker build -t wavelog-web:${CI_PIPELINE_ID} /tmp/wavelog-${CI_PIPELINE_ID}
