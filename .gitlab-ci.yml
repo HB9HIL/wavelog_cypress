@@ -70,7 +70,7 @@ test:
     matrix: *db_matrix
   script:
     - PORT=$((8000 + (${CI_PIPELINE_ID} % 1000) + ${PORT_OFFSET}))
-    - npm install
+    - npm ci
     - export CYPRESS_baseUrl="http://localhost:${PORT}/"
     - npx cypress run
   artifacts:
