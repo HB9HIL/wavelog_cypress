@@ -33,6 +33,20 @@ build:
     - docker build -t wavelog-web:${CI_PIPELINE_ID} ${SRC_DIR}
     - rm -rf ${SRC_DIR}
 
+# Syntax check every PHP file with the exact PHP version the image ships.
+# Runs inside the shared image, so no PHP install is needed on the runner.
+php-lint:
+  stage: test
+  tags:
+    - shell
+  variables:
+    GIT_STRATEGY: none
+  script:
+    - |
+      docker run --rm wavelog-web:${CI_PIPELINE_ID} bash -c \
+        'find /var/www/html -name "*.php" -print0 | xargs -0 -n1 -P"$(nproc)" php -d display_errors=stderr -l >/dev/null'
+    - echo "PHP syntax OK"
+
 # Container startup and cypress run live in one job so npm ci overlaps with
 # the database init and no combo has to wait for the slowest DB image.
 test:
