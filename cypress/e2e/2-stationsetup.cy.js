@@ -48,10 +48,15 @@ describe("Station Setup", () => {
 			.contains("Edit Visitor Link")
 			.should("be.visible");
 
+		// Bootstrap's focus trap activates only after the modal fade
+		// transition (shown.bs.modal) and refocuses the modal container.
+		// Typing before that loses every character after the first one,
+		// so wait until focus has moved into the modal.
+		cy.focused().should(($el) => {
+			expect($el.closest('.modal').length, 'focus is inside the modal').to.eq(1);
+		});
+
 		// set the public slug
-		// Assert the full value landed before saving. On slow CI the modal
-		// input is still being rendered/bound, so .type() can drop characters
-		// (e.g. "cypre") and Save would fire mid-typing.
 		cy.get('input[id="publicSlugInput"]')
 			.clear()
 			.type(env_stationsetup.public_slug)
