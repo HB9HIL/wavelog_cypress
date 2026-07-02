@@ -1,13 +1,15 @@
 stages:
   - build
+  - deploy
   - test
   - destroy
+  - cleanup
 
 default:
   tags:
     - cypress
 
-# Database matrix, shared by build/test/destroy via YAML anchor.
+# Database matrix, shared by deploy/test/destroy via YAML anchor.
 # PORT_OFFSET keeps host ports unique so all combos can run in parallel.
 .db_matrix: &db_matrix
   - { DB_SLUG: "mariadb-10-11", DB_IMAGE: "mariadb:10.11", DB_VENDOR: "mariadb", PORT_OFFSET: "10" }
@@ -17,8 +19,21 @@ default:
   - { DB_SLUG: "mysql-8-4",     DB_IMAGE: "mysql:8.4",     DB_VENDOR: "mysql",   PORT_OFFSET: "50" }
   - { DB_SLUG: "mysql-9-4",     DB_IMAGE: "mysql:9.4",     DB_VENDOR: "mysql",   PORT_OFFSET: "60" }
 
+# The web image is identical for every DB combo, so build it once per pipeline.
+# All jobs run on the same shell runner, so the image stays available locally.
 build:
   stage: build
+  tags:
+    - shell
+  script:
+    - SRC_DIR=/tmp/wavelog-${CI_PIPELINE_ID}
+    - mkdir -p ${SRC_DIR}
+    - curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz | tar xz --strip-components=1 -C ${SRC_DIR}
+    - docker build -t wavelog-web:${CI_PIPELINE_ID} ${SRC_DIR}
+    - rm -rf ${SRC_DIR}
+
+deploy:
+  stage: deploy
   tags:
     - shell
   parallel:
@@ -27,8 +42,6 @@ build:
     # Per-combo identifiers so parallel jobs don't collide on names/ports
     - SUFFIX="${CI_PIPELINE_ID}-${DB_SLUG}"
     - PORT=$((8000 + (${CI_PIPELINE_ID} % 1000) + ${PORT_OFFSET}))
-    - mkdir -p /tmp/wavelog-${SUFFIX}
-    - curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz | tar xz --strip-components=1 -C /tmp/wavelog-${SUFFIX}
     - docker network create wavelog_testnet_${SUFFIX}
     # MariaDB and MySQL images use different env var names for the same thing
     - |
@@ -44,7 +57,6 @@ build:
         --network-alias wavelog-db \
         $DB_ENV \
         ${DB_IMAGE}
-    - docker build -t wavelog-web:${SUFFIX} /tmp/wavelog-${SUFFIX}
     # Wait for the database to accept connections (MySQL 8/9 init is slow)
     - |
       echo "Waiting for ${DB_IMAGE} to become ready..."
@@ -59,7 +71,7 @@ build:
         --name wavelog-web-${SUFFIX} \
         --network wavelog_testnet_${SUFFIX} \
         -p ${PORT}:80 \
-        wavelog-web:${SUFFIX}
+        wavelog-web:${CI_PIPELINE_ID}
     - echo "Wavelog (${DB_IMAGE}) is running on http://localhost:${PORT}/"
 
 test:
@@ -92,7 +104,15 @@ destroy:
     - SUFFIX="${CI_PIPELINE_ID}-${DB_SLUG}"
     - docker stop wavelog-web-${SUFFIX} wavelog-db-${SUFFIX} || true
     - docker rm wavelog-web-${SUFFIX} wavelog-db-${SUFFIX} || true
-    - docker rmi wavelog-web:${SUFFIX} || true
     - docker network rm wavelog_testnet_${SUFFIX} || true
-    - rm -rf /tmp/wavelog-${SUFFIX}
+  when: always
+
+# Remove the shared image only after all containers using it are gone
+cleanup:
+  stage: cleanup
+  tags:
+    - shell
+  script:
+    - docker rmi wavelog-web:${CI_PIPELINE_ID} || true
+    - rm -rf /tmp/wavelog-${CI_PIPELINE_ID}
   when: always
