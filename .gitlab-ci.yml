@@ -1,6 +1,5 @@
 stages:
   - build
-  - deploy
   - test
   - destroy
   - cleanup
@@ -9,7 +8,7 @@ default:
   tags:
     - cypress
 
-# Database matrix, shared by deploy/test/destroy via YAML anchor.
+# Database matrix, shared by test/destroy via YAML anchor.
 # PORT_OFFSET keeps host ports unique so all combos can run in parallel.
 .db_matrix: &db_matrix
   - { DB_SLUG: "mariadb-10-11", DB_IMAGE: "mariadb:10.11", DB_VENDOR: "mariadb", PORT_OFFSET: "10" }
@@ -25,6 +24,8 @@ build:
   stage: build
   tags:
     - shell
+  variables:
+    GIT_STRATEGY: none  # only needs the wavelog tarball, not this repo
   script:
     - SRC_DIR=/tmp/wavelog-${CI_PIPELINE_ID}
     - mkdir -p ${SRC_DIR}
@@ -32,12 +33,20 @@ build:
     - docker build -t wavelog-web:${CI_PIPELINE_ID} ${SRC_DIR}
     - rm -rf ${SRC_DIR}
 
-deploy:
-  stage: deploy
+# Container startup and cypress run live in one job so npm ci overlaps with
+# the database init and no combo has to wait for the slowest DB image.
+test:
+  stage: test
   tags:
     - shell
   parallel:
     matrix: *db_matrix
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - .npm/
   script:
     # Per-combo identifiers so parallel jobs don't collide on names/ports
     - SUFFIX="${CI_PIPELINE_ID}-${DB_SLUG}"
@@ -57,6 +66,8 @@ deploy:
         --network-alias wavelog-db \
         $DB_ENV \
         ${DB_IMAGE}
+    # DB initializes in the background while npm installs
+    - npm ci --cache .npm --prefer-offline
     # Wait for the database to accept connections (MySQL 8/9 init is slow)
     - |
       echo "Waiting for ${DB_IMAGE} to become ready..."
@@ -72,17 +83,6 @@ deploy:
         --network wavelog_testnet_${SUFFIX} \
         -p ${PORT}:80 \
         wavelog-web:${CI_PIPELINE_ID}
-    - echo "Wavelog (${DB_IMAGE}) is running on http://localhost:${PORT}/"
-
-test:
-  stage: test
-  tags:
-    - shell
-  parallel:
-    matrix: *db_matrix
-  script:
-    - PORT=$((8000 + (${CI_PIPELINE_ID} % 1000) + ${PORT_OFFSET}))
-    - npm ci
     - export CYPRESS_baseUrl="http://localhost:${PORT}/"
     - npx cypress run
   artifacts:
@@ -98,6 +98,8 @@ destroy:
   stage: destroy
   tags:
     - shell
+  variables:
+    GIT_STRATEGY: none
   parallel:
     matrix: *db_matrix
   script:
@@ -112,6 +114,8 @@ cleanup:
   stage: cleanup
   tags:
     - shell
+  variables:
+    GIT_STRATEGY: none
   script:
     - docker rmi wavelog-web:${CI_PIPELINE_ID} || true
     - rm -rf /tmp/wavelog-${CI_PIPELINE_ID}
