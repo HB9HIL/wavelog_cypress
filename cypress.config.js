@@ -2,6 +2,9 @@ const { defineConfig } = require("cypress");
 
 module.exports = defineConfig({
 	projectId: 'Wavelog Cypress Testing',
+	// Cypress.env() is deprecated since 15.10; we migrated to Cypress.expose().
+	// Locking it down makes accidental Cypress.env() usage throw.
+	allowCypressEnv: false,
 	e2e: {
 		// baseUrl: "http://localhost:8087/",
 		video: true,

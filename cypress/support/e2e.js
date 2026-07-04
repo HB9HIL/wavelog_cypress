@@ -10,14 +10,14 @@
 // ***********************************************************
 
 // Set global variables
-Cypress.env('db', {
+Cypress.expose('db', {
     host: "wavelog-db",
     name: "wavelog",
     user: "wavelog",
     password: "wavelog"
 });
 
-Cypress.env('user', {
+Cypress.expose('user', {
     firstname: "John",
     lastname: "Smith",
     callsign: "4W7EST",
@@ -32,7 +32,7 @@ Cypress.env('user', {
     wrong_password: "wrongPassword"
 });
 
-Cypress.env('stationsetup', {
+Cypress.expose('stationsetup', {
     public_slug: "cypress",
     logbook_name: "Log 2",
     location_name: "Portable",
@@ -41,6 +41,14 @@ Cypress.env('stationsetup', {
     station_gridsquare: "JN48RI"
 });
 
+
+// Force the English UI for every test. With testIsolation (default since
+// Cypress 12) all cookies are cleared before each test, so the language cookie
+// has to be re-set here — after the reset, before the test body runs.
+// Otherwise Wavelog falls back to the browser/system language (e.g. German).
+beforeEach(() => {
+    cy.setCookie('language', 'english');
+});
 
 // Import commands.js using ES2015 syntax:
 import './commands'

@@ -35,7 +35,7 @@ describe("Station Setup", () => {
 		cy.visit("/index.php/stationsetup");
 
 		// Load variables
-		const env_stationsetup = Cypress.env('stationsetup');
+		const env_stationsetup = Cypress.expose('stationsetup');
 
 		// Click the visitor site button
 		cy.get('button[id="1"]')
@@ -75,7 +75,7 @@ describe("Station Setup", () => {
 	it("Should be possible to view the visitor site", () => {
 
 		// Load variables
-		const env_stationsetup = Cypress.env('stationsetup');
+		const env_stationsetup = Cypress.expose('stationsetup');
 
 		// to be absolutely sure this worked we can call the visitor site
 		cy.visit("/index.php/visitor/" + env_stationsetup.public_slug);
@@ -90,7 +90,7 @@ describe("Station Setup", () => {
 	it("Should be possible to view the export map", () => {
 
 		// Load variables
-		const env_stationsetup = Cypress.env('stationsetup');
+		const env_stationsetup = Cypress.expose('stationsetup');
 
 		// to be absolutely sure this worked we can call the visitor site
 		cy.visit("/index.php/visitor/exportmap/" + env_stationsetup.public_slug);
@@ -102,7 +102,7 @@ describe("Station Setup", () => {
 
 	it("Should be possible to create a new station logbook", () => {
 		// Load variables
-		const env_stationsetup = Cypress.env('stationsetup');
+		const env_stationsetup = Cypress.expose('stationsetup');
 
 		// Visit the Stationsetup Page
 		cy.visit("/index.php/stationsetup");
@@ -129,8 +129,8 @@ describe("Station Setup", () => {
 
 	it("Should be possible to create a new station location", () => {
 		// Load variables
-		const env_stationsetup = Cypress.env('stationsetup');
-		const env_user = Cypress.env('user');
+		const env_stationsetup = Cypress.expose('stationsetup');
+		const env_user = Cypress.expose('user');
 
 		// Visit the Stationsetup Page
 		cy.visit("/index.php/stationsetup");

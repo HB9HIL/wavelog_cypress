@@ -43,8 +43,8 @@ describe("Installer Test", () => {
 		
 		cy.log("Invoking the installer tests. This can take a while...");
 
-		const env_db = Cypress.env('db');
-		const env_user = Cypress.env('user');
+		const env_db = Cypress.expose('db');
+		const env_user = Cypress.expose('user');
 
 		clickContinueButton(); // Show Prechecks tab
 		clickContinueButton(); // Show Configuration tab

@@ -1,6 +1,6 @@
 Cypress.Commands.add("login", () => {
 
-    const env_user = Cypress.env('user');
+    const env_user = Cypress.expose('user');
 
 	cy.visit("/index.php");
     cy.url().should("include", "/user/login");
@@ -16,7 +16,7 @@ Cypress.Commands.add("login", () => {
 
 Cypress.Commands.add("wrong_login", () => {
 
-    const env_user = Cypress.env('user');
+    const env_user = Cypress.expose('user');
 
 	cy.visit("/index.php");
     cy.url().should("include", "/user/login");
