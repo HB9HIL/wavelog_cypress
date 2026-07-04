@@ -7,7 +7,7 @@ module.exports = defineConfig({
 	allowCypressEnv: false,
 	e2e: {
 		// baseUrl: "http://localhost:8087/",
-		video: true,
+		video: false,
 		viewportWidth: 1920,
 		viewportHeight: 1080,
 		setupNodeEvents(on, config) {
