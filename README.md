@@ -84,5 +84,24 @@ rm -rf /tmp/wavelog-${CI_PIPELINE_ID}
 # More simple - use the run_once.sh script:
 ```bash
 chmod +x run_once.sh
+# Default run: Dockerfile untouched, MariaDB 11.8
 ./run_once.sh
+```
+
+The script is parametrizable via environment variables, so you can run
+individual DB / PHP combinations from the CI matrix manually:
+
+| Variable   | Default          | Description                                             |
+|------------|------------------|---------------------------------------------------------|
+| `DATABASE` | `mariadb:11.8`   | DB image to test against (e.g. `mysql:8.4`, `mariadb:11.4`) |
+| `PHP`      | *(empty)*        | PHP version to pin (e.g. `8.3`); empty keeps the Dockerfile's default |
+| `REPO`     | `wavelog/wavelog`| Wavelog repo to pull                                    |
+| `BRANCH`   | `dev`            | Wavelog branch to pull                                  |
+
+```bash
+# MySQL 8.4 with PHP 8.3
+DATABASE=mysql:8.4 PHP=8.3 ./run_once.sh
+
+# MariaDB 11.4, PHP left at the Dockerfile default
+DATABASE=mariadb:11.4 ./run_once.sh
 ```

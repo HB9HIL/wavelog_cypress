@@ -5,14 +5,29 @@ export CI_PIPELINE_ID=$((RANDOM + 10000))
 echo "Using Pipeline ID: $CI_PIPELINE_ID"
 
 ############################
-REPO="wavelog/wavelog"
-BRANCH="dev"
-DATABASE="mariadb:11.8"
+# Configurable via environment variables; defaults give a plain MariaDB 11.8 run.
+#   DATABASE  DB image to test against (e.g. mysql:8.4, mariadb:11.4)
+#   PHP       PHP version to pin (e.g. 8.3); empty keeps the Dockerfile's default
+#   REPO      Wavelog repo to pull
+#   BRANCH    Wavelog branch to pull
+# Example: DATABASE=mysql:8.4 PHP=8.3 ./run_once.sh
+############################
+REPO="${REPO:-wavelog/wavelog}"
+BRANCH="${BRANCH:-dev}"
+DATABASE="${DATABASE:-mariadb:11.8}"
+PHP="${PHP:-}"
 ############################
 
 # Download and extract Wavelog
 mkdir -p /tmp/wavelog-${CI_PIPELINE_ID}
 curl -L https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz | tar xz --strip-components=1 -C /tmp/wavelog-${CI_PIPELINE_ID}
+
+# Optionally pin a PHP version by patching the downloaded Dockerfile.
+# Empty PHP (default) leaves the Dockerfile untouched.
+if [ -n "$PHP" ]; then
+  echo "Pinning PHP ${PHP}"
+  sed -i "s|^FROM php:.*|FROM php:${PHP}-apache|" /tmp/wavelog-${CI_PIPELINE_ID}/Dockerfile
+fi
 
 # Create Docker network
 docker network create wavelog_testnet_${CI_PIPELINE_ID}
