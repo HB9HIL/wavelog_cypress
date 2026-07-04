@@ -84,9 +84,11 @@ test:
     - npm ci --cache .npm --prefer-offline
     # Wait for the database to accept connections (MySQL 8/9 init is slow)
     - |
+      # MariaDB 11.x dropped the mysql* compat binaries; use mariadb-admin there
+      if [ "$DB_VENDOR" = "mariadb" ]; then PING=mariadb-admin; else PING=mysqladmin; fi
       echo "Waiting for ${DB_IMAGE} to become ready..."
       for i in $(seq 1 60); do
-        if docker exec wavelog-db-${SUFFIX} mysqladmin ping -h localhost --silent 2>/dev/null; then
+        if docker exec wavelog-db-${SUFFIX} "$PING" ping -h localhost --silent 2>/dev/null; then
           echo "Database is ready"; break
         fi
         sleep 2
