@@ -1,6 +1,6 @@
 ## Cypress Testing for https://github.com/wavelog/wavelog
 
-This pipeline gets triggered by a webhook and runs isolated tests using Docker containers.
+This pipeline runs isolated tests using Docker containers.
 
 # Requirements:
 
@@ -9,7 +9,7 @@ This pipeline gets triggered by a webhook and runs isolated tests using Docker c
 - git
 - Docker
 
-# Dependencies:
+# Dependencies on linux
 ```bash
 sudo apt update
 sudo apt install -y libatk1.0-0 libatk-bridge2.0-0 libgtk-3-0 libx11-xcb1 libxcb-dri3-0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libasound2 libpangocairo-1.0-0 libcups2 libnss3 xvfb
@@ -81,14 +81,8 @@ docker network rm wavelog_testnet_${CI_PIPELINE_ID}
 rm -rf /tmp/wavelog-${CI_PIPELINE_ID}
 ```
 
-# Pipeline Features:
-
-- **Isolated execution**: Each pipeline uses unique container names, networks, and ports
-- **Dynamic ports**: Port calculation ensures no conflicts between parallel runs  
-- **Automatic cleanup**: All resources are cleaned up after test completion
-- **Artifact collection**: Screenshots and videos are saved on test failures
-
-# Manual Testing:
-
-For local testing, use any 4-5 digit number as CI_PIPELINE_ID (e.g., 26328).
-The web interface will be available at `http://localhost:$((8000 + (26328 % 1000)))/` (Port 8328 in this example).
+# More simple - use the run_once.sh script:
+```bash
+chmod +x run_once.sh
+./run_once.sh
+```
