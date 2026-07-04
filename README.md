@@ -37,7 +37,7 @@ docker run -d \
   -e MARIADB_DATABASE=wavelog \
   -e MARIADB_USER=wavelog \
   -e MARIADB_PASSWORD=wavelog \
-  mariadb:11.3
+  mariadb:11.8
 
 # Build and start web container
 docker build -t wavelog-web:${CI_PIPELINE_ID} /tmp/wavelog-${CI_PIPELINE_ID}
