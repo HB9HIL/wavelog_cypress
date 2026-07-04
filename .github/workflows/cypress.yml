@@ -6,6 +6,9 @@ name: Cypress Tests
 # separate destroy/cleanup stages the GitLab pipeline requires.
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - master
 
 jobs:
   # The web image is identical for every DB combo, so build it once and share it
