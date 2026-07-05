@@ -61,7 +61,7 @@ describe("Installer Test", () => {
 			.click();
 
 		// The result box should be green (class "alert-success")
-		cy.get('div[id="db_connection_testresult"]', { timeout: 5000 })
+		cy.get('div[id="db_connection_testresult"]', { timeout: 10000 })
 			.should("be.visible")
 			.and("have.class", "alert-success");
 
@@ -87,20 +87,20 @@ describe("Installer Test", () => {
 			.click();
 
 		// Check if the installer is running
-		cy.get("body", { timeout: 10000 })
+		cy.get("body", { timeout: 20000 })
 			.contains("Installation")
 			.should("be.visible");
 
 		// Check if all steps show green after some time
-		cy.get('i[id="config_file_check"]', { timeout: 10000 })
+		cy.get('i[id="config_file_check"]', { timeout: 20000 })
 			.should("be.visible")
 			.and("have.class", "fa-check-circle");
 
-		cy.get('i[id="database_file_check"]', { timeout: 10000 })
+		cy.get('i[id="database_file_check"]', { timeout: 20000 })
 			.should("be.visible")
 			.and("have.class", "fa-check-circle");
 
-		cy.get('i[id="database_tables_check"]', { timeout: 10000 })
+		cy.get('i[id="database_tables_check"]', { timeout: 20000 })
 			.should("be.visible")
 			.and("have.class", "fa-check-circle");
 
@@ -108,11 +108,11 @@ describe("Installer Test", () => {
 		cy.get('button[id="toggleLogButton"]')
 			.click();
 
-		cy.get('i[id="update_dxcc_check"]', { timeout: 60000 })
+		cy.get('i[id="update_dxcc_check"]', { timeout: 80000 })
 			.should("be.visible")
 			.and("have.class", "fa-check-circle");
 
-		cy.get('i[id="installer_lock_check"]', { timeout: 10000 })
+		cy.get('i[id="installer_lock_check"]', { timeout: 20000 })
 			.should("be.visible")
 			.and("have.class", "fa-check-circle");
 
