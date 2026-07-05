@@ -91,28 +91,32 @@ describe("Installer Test", () => {
 			.contains("Installation")
 			.should("be.visible");
 
+		// Click the log button to stop the countdown timer
+		cy.get('button[id="toggleLogButton"]')
+			.click();
+
 		// Check if all steps show green after some time
-		cy.get('i[id="config_file_check"]', { timeout: 20000 })
+		cy.get('i[id="config_file_check"]', { timeout: 10000 })
 			.should("be.visible")
 			.and("have.class", "fa-check-circle");
 
-		cy.get('i[id="database_file_check"]', { timeout: 20000 })
+		cy.get('i[id="database_file_check"]', { timeout: 10000 })
 			.should("be.visible")
 			.and("have.class", "fa-check-circle");
 
 		cy.get('i[id="database_tables_check"]', { timeout: 20000 })
 			.should("be.visible")
 			.and("have.class", "fa-check-circle");
-
-		// Click the log button to stop the countdown timer
-		cy.get('button[id="toggleLogButton"]')
-			.click();
-
-		cy.get('i[id="update_dxcc_check"]', { timeout: 80000 })
+		
+		cy.get('i[id="database_migrations_check"]', { timeout: 60000 })
 			.should("be.visible")
 			.and("have.class", "fa-check-circle");
 
-		cy.get('i[id="installer_lock_check"]', { timeout: 20000 })
+		cy.get('i[id="update_dxcc_check"]', { timeout: 60000 })
+			.should("be.visible")
+			.and("have.class", "fa-check-circle");
+
+		cy.get('i[id="installer_lock_check"]', { timeout: 10000 })
 			.should("be.visible")
 			.and("have.class", "fa-check-circle");
 
