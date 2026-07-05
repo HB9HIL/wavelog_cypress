@@ -76,7 +76,7 @@ jobs:
           - { slug: mysql-9-4,     image: "mysql:9.4",     vendor: mysql }
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download image artifact
         uses: actions/download-artifact@v8
@@ -87,7 +87,7 @@ jobs:
         run: docker load < image.tar.gz
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
