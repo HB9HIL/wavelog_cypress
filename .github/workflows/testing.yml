@@ -65,6 +65,46 @@ jobs:
             'find /var/www/html -name "*.php" -print0 | xargs -0 -n1 -P"$(nproc)" php -d display_errors=stderr -l >/dev/null'
           echo "PHP ${{ matrix.php }} syntax OK"
 
+  # Static analysis on the Wavelog source. No PHP/DB matrix needed and no
+  # dependency on the built image, so these fetch the source directly and run
+  # in parallel. continue-on-error keeps them informational for now (CI3 magic
+  # produces noise at any phpstan level); drop it to turn them into a gate.
+  phpstan:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout (for phpstan.neon)
+        uses: actions/checkout@v5
+      - name: Fetch Wavelog source
+        run: |
+          mkdir -p src
+          curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz \
+            | tar xz --strip-components=1 -C src
+      - name: PHPStan (level 0)
+        # Pin a current PHPStan; phpstan/phpstan:latest on Docker Hub is stuck on
+        # 0.12 and cannot parse PHP 8 syntax. Config is checked in as phpstan.neon.
+        run: |
+          docker run --rm \
+            -v "$PWD/src:/app" \
+            -v "$PWD/phpstan.neon:/phpstan.neon:ro" \
+            ghcr.io/phpstan/phpstan:2 \
+            analyse -c /phpstan.neon --no-progress --memory-limit=1G
+
+  # SQL injection / PHP security scan.
+  semgrep:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Fetch Wavelog source
+        run: |
+          mkdir -p src
+          curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz \
+            | tar xz --strip-components=1 -C src
+      - name: Semgrep (PHP ruleset)
+        run: |
+          docker run --rm -v "$PWD/src:/src" semgrep/semgrep \
+            semgrep scan --config p/php --error --quiet
+
   # Container startup and cypress run live in one job so npm ci overlaps with
   # the database init. Runs the full PHP x DB cross product; each combo runs on
   # its own isolated VM.

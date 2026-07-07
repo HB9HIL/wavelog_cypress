@@ -1,0 +1,32 @@
+parameters:
+    # Level 0 = only the cheapest checks (unknown symbols, wrong arg counts,
+    # duplicate array keys, ...). Raise gradually once the code is clean.
+    level: 0
+    # Match the oldest PHP the app supports so 8.x-only syntax parses correctly.
+    phpVersion: 80200
+    # The ignore patterns below are broad safety nets; don't fail when one of
+    # them happens to match nothing.
+    reportUnmatchedIgnoredErrors: false
+    paths:
+        - /app/application
+    # Make symbols discoverable so they are not reported as "not found":
+    #   system/  CodeIgniter base classes (CI_Model/CI_Controller/CI_Migration)
+    #   src/     Wavelog\* namespaced classes and bundled libs (Dxcc, StaticMap,
+    #            predict, jwt, ...) that are autoloaded at runtime.
+    scanDirectories:
+        - /app/system
+        - /app/src
+    excludePaths:
+        analyse:
+            - /app/application/third_party/*
+            - /app/application/hooks/gettext/vendor/*
+            # Stock CodeIgniter config; its duplicate 'palm' key is harmless.
+            - /app/application/config/user_agents.php
+    ignoreErrors:
+        # CodeIgniter 3 loads libraries/models via magic __get, so $this->db,
+        # $this->load, $this->input etc. are not declared properties/methods.
+        - '#Access to an undefined property#'
+        - '#Call to an undefined method CI_#'
+        # Class name letter-case mismatches are harmless: PHP resolves class
+        # names case-insensitively at runtime.
+        - '#referenced with incorrect case#'
