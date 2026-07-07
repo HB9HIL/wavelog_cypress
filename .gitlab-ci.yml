@@ -30,6 +30,15 @@ build:
     - SRC_DIR=/tmp/wavelog-${CI_PIPELINE_ID}
     - mkdir -p ${SRC_DIR}
     - curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz | tar xz --strip-components=1 -C ${SRC_DIR}
+    # Enable MQTT so the MQTT e2e test has something to assert on. The installer
+    # copies install/config/config.php into the docker config dir, so appending
+    # here bakes mqtt_server=mqtt-broker into the built image.
+    - |
+      cat >> ${SRC_DIR}/install/config/config.php <<'PHPEOF'
+      $config['mqtt_server'] = 'mqtt-broker';
+      $config['mqtt_port'] = 1883;
+      $config['mqtt_prefix'] = 'wavelog/';
+      PHPEOF
     - docker build -t wavelog-web:${CI_PIPELINE_ID} ${SRC_DIR}
     - rm -rf ${SRC_DIR}
 
@@ -65,7 +74,19 @@ test:
     # Per-combo identifiers so parallel jobs don't collide on names/ports
     - SUFFIX="${CI_PIPELINE_ID}-${DB_SLUG}"
     - PORT=$((8000 + (${CI_PIPELINE_ID} % 1000) + ${PORT_OFFSET}))
+    # Broker gets a distinct host port per combo so parallel jobs don't collide.
+    - MQTT_PORT=$((${PORT} + 1000))
     - docker network create wavelog_testnet_${SUFFIX}
+    # MQTT broker for the MQTT e2e test: reachable by the web container via the
+    # alias mqtt-broker and by the Cypress node process via the published port.
+    - |
+      docker run -d \
+        --name wavelog-mqtt-${SUFFIX} \
+        --network wavelog_testnet_${SUFFIX} \
+        --network-alias mqtt-broker \
+        -p ${MQTT_PORT}:1883 \
+        -v "$(pwd)/docker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" \
+        eclipse-mosquitto:2
     # MariaDB and MySQL images use different env var names for the same thing
     - |
       if [ "$DB_VENDOR" = "mysql" ]; then
@@ -100,6 +121,7 @@ test:
         -p ${PORT}:80 \
         wavelog-web:${CI_PIPELINE_ID}
     - export CYPRESS_baseUrl="http://localhost:${PORT}/"
+    - export MQTT_BROKER_URL="mqtt://localhost:${MQTT_PORT}"
     - npx cypress run
   artifacts:
     when: on_failure
@@ -119,8 +141,8 @@ destroy:
     matrix: *db_matrix
   script:
     - SUFFIX="${CI_PIPELINE_ID}-${DB_SLUG}"
-    - docker stop wavelog-web-${SUFFIX} wavelog-db-${SUFFIX} || true
-    - docker rm wavelog-web-${SUFFIX} wavelog-db-${SUFFIX} || true
+    - docker stop wavelog-web-${SUFFIX} wavelog-db-${SUFFIX} wavelog-mqtt-${SUFFIX} || true
+    - docker rm wavelog-web-${SUFFIX} wavelog-db-${SUFFIX} wavelog-mqtt-${SUFFIX} || true
     - docker network rm wavelog_testnet_${SUFFIX} || true
   when: always
 

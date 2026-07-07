@@ -1,5 +1,49 @@
 const { defineConfig } = require("cypress");
 const fs = require("fs");
+const mqtt = require("mqtt");
+
+// MQTT e2e support. Wavelog publishes events server-side to the broker, so we
+// need a subscriber running in the Cypress node process (not the browser) that
+// buffers the retained-free live messages for the spec to assert on.
+//
+// The broker URL comes from process.env (NOT Cypress.env(), which is locked
+// down via allowCypressEnv:false). The three orchestrators (GitHub Actions,
+// GitLab CI, run_once.sh) export MQTT_BROKER_URL pointing at the published
+// broker port; locally it defaults to mqtt://localhost:1883.
+const MQTT_BROKER_URL = process.env.MQTT_BROKER_URL || "mqtt://localhost:1883";
+
+let mqttClient = null;
+let mqttMessages = [];
+
+function ensureMqttClient() {
+	if (mqttClient) {
+		return Promise.resolve(mqttClient);
+	}
+	return new Promise((resolve, reject) => {
+		const client = mqtt.connect(MQTT_BROKER_URL, {
+			connectTimeout: 10000,
+			reconnectPeriod: 1000,
+		});
+		client.on("connect", () => {
+			client.subscribe("wavelog/#", (err) => {
+				if (err) {
+					reject(err);
+				} else {
+					mqttClient = client;
+					resolve(client);
+				}
+			});
+		});
+		client.on("message", (topic, payload) => {
+			mqttMessages.push({ topic, payload: payload.toString() });
+		});
+		client.on("error", (err) => {
+			if (!mqttClient) {
+				reject(err);
+			}
+		});
+	});
+}
 
 module.exports = defineConfig({
 	projectId: 'Wavelog Cypress Testing',
@@ -16,6 +60,18 @@ module.exports = defineConfig({
 		viewportHeight: 1080,
 		setupNodeEvents(on, config) {
 			require("cypress-localstorage-commands/plugin")(on, config);
+
+			on("task", {
+				// Connect (lazily) and clear the buffer so a spec only sees
+				// messages published after this point.
+				"mqtt:reset": () =>
+					ensureMqttClient().then(() => {
+						mqttMessages = [];
+						return null;
+					}),
+				// Return everything buffered so far.
+				"mqtt:messages": () => ensureMqttClient().then(() => mqttMessages.slice()),
+			});
 
 			on("after:spec", (spec, results) => {
 				if (results && results.video) {

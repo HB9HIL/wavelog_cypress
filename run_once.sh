@@ -29,8 +29,29 @@ if [ -n "$PHP" ]; then
   sed -i "s|^FROM php:.*|FROM php:${PHP}-apache|" /tmp/wavelog-${CI_PIPELINE_ID}/Dockerfile
 fi
 
+# Enable MQTT in the image so the MQTT e2e test has something to assert on.
+# The installer copies install/config/config.php into the docker config dir, so
+# appending the keys here bakes mqtt_server=mqtt-broker into the built image.
+cat >> /tmp/wavelog-${CI_PIPELINE_ID}/install/config/config.php <<'EOF'
+$config['mqtt_server'] = 'mqtt-broker';
+$config['mqtt_port'] = 1883;
+$config['mqtt_prefix'] = 'wavelog/';
+EOF
+
 # Create Docker network
 docker network create wavelog_testnet_${CI_PIPELINE_ID}
+
+# Start the MQTT broker on the same network (alias mqtt-broker for the web
+# container) and publish a host port so the Cypress node process can subscribe.
+MQTT_PORT=$((9000 + (${CI_PIPELINE_ID} % 1000)))
+docker run -d \
+  --name wavelog-mqtt-${CI_PIPELINE_ID} \
+  --network wavelog_testnet_${CI_PIPELINE_ID} \
+  --network-alias mqtt-broker \
+  -p ${MQTT_PORT}:1883 \
+  -v "$(pwd)/docker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" \
+  eclipse-mosquitto:2
+export MQTT_BROKER_URL="mqtt://localhost:${MQTT_PORT}"
 
 if [[ $DATABASE == mariadb* ]]; then
   echo "Using MariaDB database"
@@ -73,8 +94,8 @@ export CYPRESS_baseUrl="http://localhost:$((8000 + (${CI_PIPELINE_ID} % 1000)))/
 npx cypress run --browser chromium
 
 # Stop and remove containers
-docker stop wavelog-web-${CI_PIPELINE_ID} wavelog-db-${CI_PIPELINE_ID}
-docker rm wavelog-web-${CI_PIPELINE_ID} wavelog-db-${CI_PIPELINE_ID}
+docker stop wavelog-web-${CI_PIPELINE_ID} wavelog-db-${CI_PIPELINE_ID} wavelog-mqtt-${CI_PIPELINE_ID}
+docker rm wavelog-web-${CI_PIPELINE_ID} wavelog-db-${CI_PIPELINE_ID} wavelog-mqtt-${CI_PIPELINE_ID}
 
 # Remove image and network
 docker rmi wavelog-web:${CI_PIPELINE_ID}

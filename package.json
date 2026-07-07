@@ -1,7 +1,8 @@
 {
   "devDependencies": {
     "cypress": "^15.18.0",
-    "cypress-localstorage-commands": "^2.3.0"
+    "cypress-localstorage-commands": "^2.3.0",
+    "mqtt": "^5.15.2"
   },
   "dependencies": {
     "cypress-real-events": "^1.15.0"

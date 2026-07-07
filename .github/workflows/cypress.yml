@@ -27,6 +27,14 @@ jobs:
             | tar xz --strip-components=1 -C /tmp/wavelog
           # Dockerfile pins a fixed PHP base image; swap it for the matrix version
           sed -i "s|^FROM php:.*|FROM php:${{ matrix.php }}-apache|" /tmp/wavelog/Dockerfile
+          # Enable MQTT so the MQTT e2e test has something to assert on. The
+          # installer copies install/config/config.php into the docker config
+          # dir, so appending here bakes mqtt_server=mqtt-broker into the image.
+          cat >> /tmp/wavelog/install/config/config.php <<'EOF'
+          $config['mqtt_server'] = 'mqtt-broker';
+          $config['mqtt_port'] = 1883;
+          $config['mqtt_prefix'] = 'wavelog/';
+          EOF
           docker build -t wavelog-web:php${{ matrix.php }} /tmp/wavelog
           docker save wavelog-web:php${{ matrix.php }} | gzip > image.tar.gz
       - name: Upload image artifact
@@ -133,9 +141,22 @@ jobs:
             -p 8080:80 \
             wavelog-web:php${{ matrix.php }}
 
+      # Broker for the MQTT e2e test: reachable by the web container via the
+      # network alias mqtt-broker and by the Cypress node process via localhost.
+      - name: Start MQTT broker
+        run: |
+          docker run -d \
+            --name wavelog-mqtt \
+            --network wavelog_testnet \
+            --network-alias mqtt-broker \
+            -p 1883:1883 \
+            -v "${{ github.workspace }}/docker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" \
+            eclipse-mosquitto:2
+
       - name: Run Cypress
         env:
           CYPRESS_baseUrl: "http://localhost:8080/"
+          MQTT_BROKER_URL: "mqtt://localhost:1883"
         run: npx cypress run
 
       - name: Upload artifacts on failure
