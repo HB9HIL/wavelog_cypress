@@ -6,9 +6,23 @@ name: Cypress Tests
 # offsets, name suffixes and the separate destroy/cleanup stages GitLab needs.
 on:
   workflow_dispatch:
+    # Same knobs as run_once.sh: which Wavelog repo/branch to pull and test.
+    inputs:
+      REPO:
+        description: 'Wavelog repo to pull'
+        default: 'wavelog/wavelog'
+      BRANCH:
+        description: 'Wavelog branch to pull'
+        default: 'dev'
   push:
     branches:
       - master
+
+# Expose REPO/BRANCH to every job's run: steps as $REPO/$BRANCH. On push (no
+# inputs) they fall back to the run_once.sh defaults.
+env:
+  REPO: ${{ github.event.inputs.REPO || 'wavelog/wavelog' }}
+  BRANCH: ${{ github.event.inputs.BRANCH || 'dev' }}
 
 jobs:
   # The web image is identical for every DB combo, so build it once per PHP
@@ -23,7 +37,7 @@ jobs:
       - name: Build Wavelog web image (PHP ${{ matrix.php }})
         run: |
           mkdir -p /tmp/wavelog
-          curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz \
+          curl -L "https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz" \
             | tar xz --strip-components=1 -C /tmp/wavelog
           # Dockerfile pins a fixed PHP base image; swap it for the matrix version
           sed -i "s|^FROM php:.*|FROM php:${{ matrix.php }}-apache|" /tmp/wavelog/Dockerfile
@@ -78,7 +92,7 @@ jobs:
       - name: Fetch Wavelog source
         run: |
           mkdir -p src
-          curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz \
+          curl -L "https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz" \
             | tar xz --strip-components=1 -C src
       - name: PHPStan (level 0)
         # Pin a current PHPStan; phpstan/phpstan:latest on Docker Hub is stuck on
@@ -98,7 +112,7 @@ jobs:
       - name: Fetch Wavelog source
         run: |
           mkdir -p src
-          curl -L https://github.com/wavelog/wavelog/archive/refs/heads/dev.tar.gz \
+          curl -L "https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz" \
             | tar xz --strip-components=1 -C src
       - name: Semgrep (PHP ruleset)
         run: |
