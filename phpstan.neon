@@ -30,3 +30,14 @@ parameters:
         # Class name letter-case mismatches are harmless: PHP resolves class
         # names case-insensitively at runtime.
         - '#referenced with incorrect case#'
+        # echo_table_header_col is defined in several mutually exclusive view
+        # files with differing signatures (1 vs. 2 parameters). PHPStan analyses
+        # them all in the same global scope and checks calls against the wrong
+        # declaration. At runtime CI loads only one of these views per request.
+        -
+            message: '#Function echo_table_header_col invoked with#'
+            identifier: arguments.count
+        # same for write_activators
+        -
+            message: '#Function write_activators invoked with#'
+            identifier: arguments.count
