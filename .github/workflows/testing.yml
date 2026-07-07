@@ -116,9 +116,15 @@ jobs:
           curl -L "https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz" \
             | tar xz --strip-components=1 -C src
       - name: Semgrep (PHP ruleset)
+        # Exclusions mirror run_once.sh:
+        #   system/   CI3 framework core (third-party); also a flat false positive
+        #             where log_message() is flagged as tainted SQL.
+        #   install/  one-time, pre-auth installer bootstrap; not part of the
+        #             running application's attack surface.
         run: |
           docker run --rm -v "$PWD/src:/src" semgrep/semgrep \
-            semgrep scan --config p/php --error --quiet
+            semgrep scan --config p/php --error --quiet \
+              --exclude=system --exclude=install
 
   # Container startup and cypress run live in one job so npm ci overlaps with
   # the database init. Runs the full PHP x DB cross product; each combo runs on
