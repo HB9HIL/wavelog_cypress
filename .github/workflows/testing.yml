@@ -1,5 +1,9 @@
 name: Cypress Tests
 
+# Show the tested repo/branch as the run title in the Actions list. On push
+# there are no inputs, so fall back to the same defaults as the env block below.
+run-name: Test ${{ github.event.inputs.REPO || 'wavelog/wavelog' }}@${{ github.event.inputs.BRANCH || 'dev' }}
+
 # Runs on pushes to master and on manual dispatch. Unlike the GitLab pipeline
 # (single shared shell runner), every job here runs on its own fresh, isolated
 # ubuntu-latest VM with Docker preinstalled. That removes the need for port
