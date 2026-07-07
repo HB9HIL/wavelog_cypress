@@ -261,21 +261,27 @@ describe("Contesting engine window management", () => {
 	});
 
 	it("Resets the layout, restoring a hidden window", () => {
-		// Hide the first window first.
-		cy.get("#logger-workspace .window").filter(":visible").first().as("win");
-		cy.get("@win").find(".window-btn.close").click();
-		cy.get("@win").should("not.be.visible");
+		// Hide the first visible window, remembering exactly which one it was.
+		// (Operate on the concrete element/id rather than re-querying an alias:
+		// a ".filter(':visible').first()" alias would resolve to a *different*
+		// window once the first one is hidden.)
+		cy.get("#logger-workspace .window").filter(":visible").first().then(($w) => {
+			const winId = $w[0].id;
 
-		// resetUserLayout() asks for confirmation before restoring defaults.
-		cy.window().then((win) => {
-			cy.stub(win, "confirm").returns(true);
+			cy.wrap($w).find(".window-btn.close").click();
+			cy.wrap($w).should("not.be.visible");
+
+			// resetUserLayout() asks for confirmation before restoring defaults.
+			cy.window().then((win) => {
+				cy.stub(win, "confirm").returns(true);
+			});
+
+			cy.get("#controlPanelToggle").click();
+			cy.get("#controlPanel").should("have.class", "show");
+			cy.get("#resetLayoutBtn").click();
+
+			// The previously hidden window is visible again.
+			cy.get(`#${winId}`).should("be.visible");
 		});
-
-		cy.get("#controlPanelToggle").click();
-		cy.get("#controlPanel").should("have.class", "show");
-		cy.get("#resetLayoutBtn").click();
-
-		// The previously hidden window is visible again.
-		cy.get("@win").should("be.visible");
 	});
 });
