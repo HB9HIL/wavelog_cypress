@@ -1,4 +1,5 @@
 const { defineConfig } = require("cypress");
+const fs = require("fs");
 
 module.exports = defineConfig({
 	projectId: 'Wavelog Cypress Testing',
@@ -7,11 +8,26 @@ module.exports = defineConfig({
 	allowCypressEnv: false,
 	e2e: {
 		// baseUrl: "http://localhost:8087/",
-		video: false,
+		// Record video for every spec, then keep it only when the spec failed
+		// (see the after:spec hook below). Cypress has no built-in
+		// "video on failure" switch, so we delete videos of passing specs.
+		video: true,
 		viewportWidth: 1920,
 		viewportHeight: 1080,
 		setupNodeEvents(on, config) {
 			require("cypress-localstorage-commands/plugin")(on, config);
+
+			on("after:spec", (spec, results) => {
+				if (results && results.video) {
+					const failed = results.tests.some((test) =>
+						test.attempts.some((attempt) => attempt.state === "failed")
+					);
+					if (!failed) {
+						fs.unlinkSync(results.video);
+					}
+				}
+			});
+
 			return config;
 		},
 	},
