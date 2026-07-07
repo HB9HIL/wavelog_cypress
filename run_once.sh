@@ -95,10 +95,14 @@ if [ "$ONLY" = "semgrep" ]; then run_semgrep; cleanup_temp; exit $STATIC_FAIL; f
 # Enable MQTT in the image so the MQTT e2e test has something to assert on.
 # The installer copies install/config/config.php into the docker config dir, so
 # appending the keys here bakes mqtt_server=mqtt-broker into the built image.
+# special_callsign turns on the Clubstation/Impersonate feature so the
+# clubstation e2e test finds its UI (the installer generates a random
+# encryption_key, so impersonate is not blocked by the default flossie key).
 cat >> /tmp/wavelog-${CI_PIPELINE_ID}/install/config/config.php <<'EOF'
 $config['mqtt_server'] = 'mqtt-broker';
 $config['mqtt_port'] = 1883;
 $config['mqtt_prefix'] = 'wavelog/';
+$config['special_callsign'] = true;
 EOF
 
 # For a full run, bring up network/MQTT/DB early so the database initializes

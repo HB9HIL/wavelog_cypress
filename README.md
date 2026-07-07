@@ -102,6 +102,7 @@ cat >> /tmp/wavelog-${CI_PIPELINE_ID}/install/config/config.php <<'EOF'
 $config['mqtt_server'] = 'mqtt-broker';
 $config['mqtt_port'] = 1883;
 $config['mqtt_prefix'] = 'wavelog/';
+$config['special_callsign'] = true;
 EOF
 
 # Create Docker network
@@ -137,7 +138,7 @@ docker run -d \
   wavelog-web:${CI_PIPELINE_ID}
 
 # Install npm dependencies
-npm install
+npm ci
 
 # Show the final port
 echo "Wavelog is running on: http://localhost:$((8000 + (${CI_PIPELINE_ID} % 1000)))/"

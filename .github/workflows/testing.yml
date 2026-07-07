@@ -44,10 +44,14 @@ jobs:
           # Enable MQTT so the MQTT e2e test has something to assert on. The
           # installer copies install/config/config.php into the docker config
           # dir, so appending here bakes mqtt_server=mqtt-broker into the image.
+          # special_callsign enables the Clubstation/Impersonate feature for the
+          # clubstation e2e test (the installer generates a random encryption_key,
+          # so impersonate is not blocked by the default flossie key).
           cat >> /tmp/wavelog/install/config/config.php <<'EOF'
           $config['mqtt_server'] = 'mqtt-broker';
           $config['mqtt_port'] = 1883;
           $config['mqtt_prefix'] = 'wavelog/';
+          $config['special_callsign'] = true;
           EOF
           docker build -t wavelog-web:php${{ matrix.php }} /tmp/wavelog
           docker save wavelog-web:php${{ matrix.php }} | gzip > image.tar.gz

@@ -41,6 +41,19 @@ Cypress.expose('stationsetup', {
     station_gridsquare: "JN48RI"
 });
 
+// Clubstation used by 13-clubstation.cy.js. A clubstation is just a normal user
+// account with the clubstation flag set (created via user/add?club=1). The admin
+// (Cypress.expose('user'), callsign 4W7EST) impersonates it directly and is also
+// added as Club Officer to test the club-switch path. Avoid a "0" in the callsign
+// (the UI renders it as Ø, which complicates text assertions).
+Cypress.expose('clubstation', {
+    username: "club.test",
+    password: "clubSafePa33word",
+    callsign: "HB9CLUB",
+    email: "club@example.com",
+    userlocator: "JN47RI"
+});
+
 
 // Force the English UI for every test. With testIsolation (default since
 // Cypress 12) all cookies are cleared before each test, so the language cookie
