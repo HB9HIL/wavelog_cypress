@@ -91,6 +91,7 @@ jobs:
         uses: actions/checkout@v5
       - name: Fetch Wavelog source
         run: |
+          echo "Fetching Wavelog source from ${REPO} branch ${BRANCH}"
           mkdir -p src
           curl -L "https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz" \
             | tar xz --strip-components=1 -C src
