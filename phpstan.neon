@@ -43,3 +43,6 @@ parameters:
             identifier: arguments.count
         # Function alter_member() has a redirect to it doesn't need a return
         - '#alter_member\(\) should return bool#'
+        # We ignore any errors in Method Unzip:: because it's a third-party lib
+        # which is currently not in our maintenance
+        - '#Method Unzip::#'

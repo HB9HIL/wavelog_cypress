@@ -70,8 +70,14 @@ run_phpstan() {
 
 run_semgrep() {
   echo "=== SQL injection scan (semgrep, PHP ruleset) ==="
+  # Path exclusions live here (not in a .semgrepignore inside the Wavelog source):
+  #   system/   CodeIgniter 3 framework core (third-party). Also carries a flat
+  #             false positive where a log_message() call is flagged as tainted SQL.
+  #   install/  one-time, pre-auth installer bootstrap that runs before install/.lock
+  #             is set; not part of the running application's attack surface.
   docker run --rm -v /tmp/wavelog-${CI_PIPELINE_ID}:/src semgrep/semgrep \
     semgrep scan --config p/php --error --quiet \
+      --exclude=system --exclude=install \
     || { echo "Semgrep reported findings"; STATIC_FAIL=1; }
 }
 
