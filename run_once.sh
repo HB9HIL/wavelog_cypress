@@ -70,7 +70,7 @@ echo "Wavelog is running on: http://localhost:$((8000 + (${CI_PIPELINE_ID} % 100
 
 # Set the correct base URL for Cypress
 export CYPRESS_baseUrl="http://localhost:$((8000 + (${CI_PIPELINE_ID} % 1000)))/"
-npx cypress run
+npx cypress run --browser chromium
 
 # Stop and remove containers
 docker stop wavelog-web-${CI_PIPELINE_ID} wavelog-db-${CI_PIPELINE_ID}
