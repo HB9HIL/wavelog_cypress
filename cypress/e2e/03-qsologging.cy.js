@@ -144,6 +144,43 @@ describe("QSO Live Logging", () => {
 		cy.get("#frequency")
 			.should("have.value", "18130000");
 	});
+
+	it("Post QSO mode enables the date and time fields", () => {
+		// manual=1 is the "log a QSO made in the past" mode. Unlike the live
+		// mode (manual=0), the date/time inputs are enabled for manual entry.
+		cy.visit("/index.php/qso?manual=1");
+
+		cy.get("#start_date")
+			.should("be.visible")
+			.and("not.be.disabled");
+		cy.get("#start_time")
+			.should("be.visible")
+			.and("not.be.disabled");
+
+		// The tab badge switches from LIVE to POST
+		cy.get("#qso-tab")
+			.should("contain.text", "POST");
+	});
+
+	it("Adjusts the default RST to the selected mode", () => {
+		// Visit the QSO Live Logging Page
+		cy.visit("/index.php/qso?manual=0");
+
+		// CW switches the default report to 599 (setRst() in common.js)
+		cy.get("#mode").select("CW");
+		cy.get("#rst_sent").should("have.value", "599");
+		cy.get("#rst_rcvd").should("have.value", "599");
+
+		// FT8 (and the other weak-signal modes) use -05
+		cy.get("#mode").select("FT8");
+		cy.get("#rst_sent").should("have.value", "-05");
+		cy.get("#rst_rcvd").should("have.value", "-05");
+
+		// SSB (phone) falls back to 59
+		cy.get("#mode").select("SSB");
+		cy.get("#rst_sent").should("have.value", "59");
+		cy.get("#rst_rcvd").should("have.value", "59");
+	});
 });
 
 describe("SimpleFLE", () => {

@@ -103,3 +103,28 @@ describe("Version Info Modal", () => {
 			.should("not.exist");
 	});
 });
+
+describe("Logout Test", () => {
+
+	before(() => {
+		cy.setCookie('language', 'english');
+	});
+
+	it("Should log out and end up back on the login page", () => {
+		// Start from an authenticated session
+		cy.login();
+
+		// Trigger the logout route (User::logout redirects to user/login)
+		cy.visit("/index.php/user/logout");
+
+		cy.url().should("include", "/user/login");
+	});
+
+	it("Should not allow reaching the dashboard after logout", () => {
+		// The server-side session is destroyed, so a protected page must
+		// bounce us back to the login form.
+		cy.visit("/index.php/dashboard");
+
+		cy.url().should("include", "/user/login");
+	});
+});

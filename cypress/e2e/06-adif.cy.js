@@ -76,6 +76,24 @@ describe("ADIF Import / Export", () => {
 			// A valid ADIF export ends the header with <EOH> and holds records
 			expect(response.body).to.contain("<EOH>");
 			expect(response.body).to.contain("<CALL:");
+			// Each record carries its band and mode, and terminates with <EOR>
+			expect(response.body).to.contain("<BAND:");
+			expect(response.body).to.contain("<MODE:");
+			expect(response.body).to.contain("<EOR>");
+		});
+	});
+
+	it("Should offer a custom export form on the Export tab", () => {
+		cy.visit("/index.php/adif");
+		cy.get("#export-tab").click({ force: true });
+
+		// The export panel holds a form posting to adif/export_custom with a
+		// station-profile picker and an optional date range.
+		cy.get("#export").within(() => {
+			cy.get('form[action*="export_custom"]').should("exist");
+			cy.get('select[name="station_profile"]').should("exist");
+			cy.get('input[name="from"]').should("exist");
+			cy.get('input[name="to"]').should("exist");
 		});
 	});
 });
