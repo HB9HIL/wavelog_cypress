@@ -41,3 +41,5 @@ parameters:
         -
             message: '#Function write_activators invoked with#'
             identifier: arguments.count
+        # Function alter_member() has a redirect to it doesn't need a return
+        - '#alter_member\(\) should return bool#'
