@@ -86,7 +86,7 @@ describe("Menu -> Logbook Overview", () => {
 			.should("be.visible")
 			.contains("Edit QSO")
 			.click()
-			.wait(300)
+			// .should('be.visible') below retries until the modal has opened.
 			.get(".modal-content")
 			.should("be.visible")
 			.get(".modal-header")

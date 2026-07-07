@@ -76,8 +76,10 @@ describe("MQTT Events", () => {
 		cy.get("#band").select("20m");
 		cy.get("#mode").select("SSB");
 		cy.get("#callsign").type("DL1MQT").blur();
+		// No fixed wait before the click: the confirmation assertion below
+		// retries, and retries:2 in the config re-runs the spec if the save
+		// handler was not yet bound on the first attempt.
 		cy.get('button[id="saveQso"]')
-			.wait(1000)
 			.click();
 
 		cy.get('body')

@@ -119,10 +119,10 @@ describe("Station Setup", () => {
 		// and save it
 		cy.get('button')
 			.contains("Save")
-			.click()
-			.wait(1000);
+			.click();
 
-		// The second logbook should appear in the list now
+		// The second logbook should appear in the list now. .contains() retries
+		// until the AJAX save has reloaded the table, so no fixed wait is needed.
 		cy.get('body')
 			.contains(env_stationsetup.logbook_name);
 	});
@@ -150,8 +150,8 @@ describe("Station Setup", () => {
 		cy.get('button[data-bs-toggle="dropdown"]')
 			.click();
 		cy.get('input[class="multiselect-search form-control"]')
-			.type(env_user.dxcc)
-			.wait(300);
+			.type(env_user.dxcc);
+		// No fixed wait: .should('be.visible') retries until the filtered option shows.
 		cy.get('button')
 			.filter(`[title*="${env_user.dxcc_selectname}"]`)
 			.should('be.visible')

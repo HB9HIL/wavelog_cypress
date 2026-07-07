@@ -74,7 +74,9 @@ describe("Installer Test", () => {
 		cy.get('input[id="city"]').type(env_user.city);
 		cy.get('input[id="userlocator"]').type(env_user.userlocator);
 		cy.get('button[id="dxcc_button"]').click();
-		cy.get('input[type="search"]').type(env_user.dxcc).wait(300);
+		cy.get('input[type="search"]').type(env_user.dxcc);
+		// No fixed wait: the .should('be.visible') below retries until the
+		// filtered dropdown option has rendered.
 		cy.get('button.multiselect-option.dropdown-item[title="'+env_user.dxcc_selectname+'"]').should('be.visible').click();
 		cy.get('input[id="username"]').type(env_user.username);
 		cy.get('input[id="password"]').type(env_user.password);

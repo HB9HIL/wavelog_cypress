@@ -83,17 +83,18 @@ describe("QSO Live Logging", () => {
 		cy.get("#callsign")
 			.type("DK0TU")
 			.blur();
+		// The 'worked before' assertion already gates the callsign lookup, so the
+		// form is ready to submit; no fixed waits around the click are needed.
 		cy.get('#timesWorked')
-			.should('contain.text', 'worked before')
-			.wait(1000)
-			.get('button[id="saveQso"]')
-			.click()
-			.wait(1000);
+			.should('contain.text', 'worked before');
+		cy.get('button[id="saveQso"]')
+			.click();
 
-		// Check if the QSO has been saved
+		// Check if the QSO has been saved. .contains(...).should('be.visible')
+		// retries until the confirmation renders.
 		cy.get('body')
 			.contains("was added to logbook")
-			.should("be.visible", { timeout: 1000 });
+			.should("be.visible");
 	});
 
 	it("Log a second QSO to check if worked before", () => {
@@ -106,13 +107,14 @@ describe("QSO Live Logging", () => {
 			.blur();
 		cy.get("body")
 			.contains("worked before")
-			.should("be.visible", { timeout: 1000 });
+			.should("be.visible");
 		cy.get("#band")
 			.select("40m");
 		cy.get("#mode")
 			.select("AM");
+		// The 'worked before' assertion above confirms the lookup finished, so
+		// the save handler is bound; no fixed wait before the click.
 		cy.get('button[id="saveQso"]')
-			.wait(2000)
 			.click();
 
 		// Check if the QSO has been saved

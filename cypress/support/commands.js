@@ -9,9 +9,10 @@ Cypress.Commands.add("login", () => {
     cy.get('input[name="user_name"]').type(env_user.username);
 	cy.get('input[name="user_password"]').type(env_user.password);
 
-    cy.get('button[type="submit"]').wait(100).click();
+    cy.get('button[type="submit"]').click();
 
-    cy.url().wait(300).should("include", "/dashboard");
+    // cy.url() retries on its own until the redirect lands; no fixed wait needed.
+    cy.url().should("include", "/dashboard");
 });
 
 Cypress.Commands.add("wrong_login", () => {
@@ -25,7 +26,7 @@ Cypress.Commands.add("wrong_login", () => {
     cy.get('input[name="user_name"]').type(env_user.username);
 	cy.get('input[name="user_password"]').type(env_user.wrong_password);
 
-    cy.get('button[type="submit"]').wait(100).click();
+    cy.get('button[type="submit"]').click();
 
 });
 

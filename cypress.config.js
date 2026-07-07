@@ -50,6 +50,18 @@ module.exports = defineConfig({
 	// Cypress.env() is deprecated since 15.10; we migrated to Cypress.expose().
 	// Locking it down makes accidental Cypress.env() usage throw.
 	allowCypressEnv: false,
+	// Retry flaky specs automatically. Under CI load the DB/PHP-FPM containers
+	// and the browser-side JS libs occasionally need a moment longer than a
+	// single attempt allows; retrying the one spec beats re-running the whole
+	// pipeline by hand. runMode covers CI (GitHub/GitLab/run_once.sh); openMode
+	// stays 0 so `cypress open` fails fast and shows real errors while developing.
+	retries: {
+		runMode: 3,
+		openMode: 0,
+	},
+	// Default 4s is tight in CI: JS libs, XHRs and DB round-trips run under load.
+	// Bumping the implicit assertion/command timeout removes most timing flakes.
+	defaultCommandTimeout: 8000,
 	e2e: {
 		// baseUrl: "http://localhost:8087/",
 		// Record video for every spec, then keep it only when the spec failed

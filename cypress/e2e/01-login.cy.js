@@ -69,7 +69,7 @@ describe("Version Info Modal", () => {
 		cy.get("button")
 			.contains("Close")
 			.should("be.visible")
-			.wait(300)
+			.wait(300) // wait for the button to be clickable, retry does not work here
 			.click();
 
 		// check if the modal is not visible
@@ -88,7 +88,7 @@ describe("Version Info Modal", () => {
 		cy.get("button")
 			.contains("Don't show again")
 			.should("be.visible")
-			.wait(300)
+			.wait(300) // wait for the button to be clickable, retry does not work here
 			.click();
 
 		// check if the modal is not visible
