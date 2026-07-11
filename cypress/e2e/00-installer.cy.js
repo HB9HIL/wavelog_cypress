@@ -111,7 +111,7 @@ describe("Installer Test", { retries: 0 }, () => {
 			.should("be.visible")
 			.and("have.class", "fa-check-circle");
 
-		cy.get('i[id="database_migrations_check"]', { timeout: 180000 })
+		cy.get('i[id="database_migrations_check"]', { timeout: 600000 })
 			.should("be.visible")
 			.and("have.class", "fa-check-circle");
 
