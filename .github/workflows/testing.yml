@@ -2,7 +2,7 @@ name: Cypress Tests
 
 # Show the tested repo/branch as the run title in the Actions list. On push
 # there are no inputs, so fall back to the same defaults as the env block below.
-run-name: Test ${{ github.event.inputs.REPO || 'wavelog/wavelog' }}@${{ github.event.inputs.BRANCH || 'dev' }}
+run-name: Test ${{ github.event.inputs.REPO || 'wavelog/wavelog' }}@${{ github.event.inputs.BRANCH || 'dev' }}${{ github.event.inputs.SHA && format(' @ {0}', github.event.inputs.SHA) || '' }}
 
 # Runs on pushes to master and on manual dispatch. Unlike the GitLab pipeline
 # (single shared shell runner), every job here runs on its own fresh, isolated
@@ -18,6 +18,9 @@ on:
       BRANCH:
         description: 'Wavelog branch to pull'
         default: 'dev'
+      SHA:
+        description: 'Wavelog commit SHA under test (pins the checkout; blank = branch tip)'
+        default: ''
   push:
     branches:
       - master
@@ -27,6 +30,9 @@ on:
 env:
   REPO: ${{ github.event.inputs.REPO || 'wavelog/wavelog' }}
   BRANCH: ${{ github.event.inputs.BRANCH || 'dev' }}
+  # The relay passes the PR head SHA so the checkout can pin the exact commit.
+  # Empty on push (no inputs); the checkout then falls back to the branch tip.
+  SHA: ${{ github.event.inputs.SHA || '' }}
 
 jobs:
   # The web image is identical for every DB combo, so build it once per PHP
@@ -38,26 +44,31 @@ jobs:
       matrix:
         php: ["8.2", "8.3", "8.4", "8.5"]
     steps:
-      - name: Build Wavelog web image (PHP ${{ matrix.php }})
+      - name: Checkout Wavelog (${{ env.REPO }}@${{ env.SHA || env.BRANCH }})
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.REPO }}
+          # Pin the exact commit the relay reported; fall back to the branch tip
+          # for the push-triggered run, which carries no SHA input.
+          ref: ${{ env.SHA || env.BRANCH }}
+          path: wavelog
+      - name: Build Wavelog web image (PHP ${{ matrix.php }} @ ${{ env.SHA || env.BRANCH }})
         run: |
-          mkdir -p /tmp/wavelog
-          curl -L "https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz" \
-            | tar xz --strip-components=1 -C /tmp/wavelog
           # Dockerfile pins a fixed PHP base image; swap it for the matrix version
-          sed -i "s|^FROM php:.*|FROM php:${{ matrix.php }}-apache|" /tmp/wavelog/Dockerfile
+          sed -i "s|^FROM php:.*|FROM php:${{ matrix.php }}-apache|" wavelog/Dockerfile
           # Enable MQTT so the MQTT e2e test has something to assert on. The
           # installer copies install/config/config.php into the docker config
           # dir, so appending here bakes mqtt_server=mqtt-broker into the image.
           # special_callsign enables the Clubstation/Impersonate feature for the
           # clubstation e2e test (the installer generates a random encryption_key,
           # so impersonate is not blocked by the default flossie key).
-          cat >> /tmp/wavelog/install/config/config.php <<'EOF'
+          cat >> wavelog/install/config/config.php <<'EOF'
           $config['mqtt_server'] = 'mqtt-broker';
           $config['mqtt_port'] = 1883;
           $config['mqtt_prefix'] = 'wavelog/';
           $config['special_callsign'] = true;
           EOF
-          docker build -t wavelog-web:php${{ matrix.php }} /tmp/wavelog
+          docker build -t wavelog-web:php${{ matrix.php }} wavelog
           docker save wavelog-web:php${{ matrix.php }} | gzip > image.tar.gz
       - name: Upload image artifact
         uses: actions/upload-artifact@v7
