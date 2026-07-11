@@ -84,7 +84,22 @@ fi
 # print findings and record STATIC_FAIL but do not abort Cypress.
 # ---------------------------------------------------------------------------
 STATIC_FAIL=0
+# Per-check results for the report: "ok" / "fail" / "" (empty = did not run).
+LINT_RESULT=""
+PHPSTAN_RESULT=""
+SEMGREP_RESULT=""
 cleanup_temp() { rm -rf /tmp/wavelog-${CI_PIPELINE_ID}; }
+
+# Render one static-check result line. $1 is the padded label, $2 the result
+# value ("ok" / "fail" / "" = did not run -> SKIPPED).
+report_line() {
+  local GREEN="\033[1;32m" RED="\033[1;31m" YELLOW="\033[1;33m" RESET="\033[0m"
+  case "$2" in
+    ok)   echo -e "  $1${GREEN}OK${RESET}" ;;
+    fail) echo -e "  $1${RED}FAILED (see output above)${RESET}" ;;
+    *)    echo -e "  $1${YELLOW}SKIPPED${RESET}" ;;
+  esac
+}
 
 # ---------------------------------------------------------------------------
 # Final report. Shown for every mode, including ONLY=... runs. Cypress is
@@ -119,13 +134,9 @@ print_report() {
   else
     echo -e "  Cypress:   ${RED}FAILED (exit $CYPRESS_EXIT)${RESET}"
   fi
-  if [ "$ONLY" = "cypress" ]; then
-    echo -e "  Static:    ${YELLOW}SKIPPED (ONLY=cypress)${RESET}"
-  elif [ $STATIC_FAIL -eq 0 ]; then
-    echo -e "  Static:    ${GREEN}OK${RESET}"
-  else
-    echo -e "  Static:    ${RED}ISSUES FOUND (see output above)${RESET}"
-  fi
+  report_line "Lint:      " "$LINT_RESULT"
+  report_line "PHPStan:   " "$PHPSTAN_RESULT"
+  report_line "Semgrep:   " "$SEMGREP_RESULT"
   echo -e "${CYAN}======================================================${RESET}"
   echo ""
 }
@@ -134,12 +145,15 @@ run_phpstan() {
   echo "=== PHPStan (level 0) ==="
   # Pin a current PHPStan (Docker Hub's phpstan/phpstan:latest is stuck on 0.12,
   # which cannot parse PHP 8 syntax). Config lives next to this script.
-  docker run --rm \
+  if docker run --rm \
     -v /tmp/wavelog-${CI_PIPELINE_ID}:/app \
     -v "$(pwd)/phpstan.neon:/phpstan.neon:ro" \
     ghcr.io/phpstan/phpstan:2 \
-    analyse -c /phpstan.neon --no-progress --memory-limit=1G \
-    || { echo "PHPStan reported issues"; STATIC_FAIL=1; }
+    analyse -c /phpstan.neon --no-progress --memory-limit=1G; then
+    PHPSTAN_RESULT=ok
+  else
+    echo "PHPStan reported issues"; STATIC_FAIL=1; PHPSTAN_RESULT=fail
+  fi
 }
 
 run_semgrep() {
@@ -149,17 +163,23 @@ run_semgrep() {
   #             false positive where a log_message() call is flagged as tainted SQL.
   #   install/  one-time, pre-auth installer bootstrap that runs before install/.lock
   #             is set; not part of the running application's attack surface.
-  docker run --rm -v /tmp/wavelog-${CI_PIPELINE_ID}:/src semgrep/semgrep \
+  if docker run --rm -v /tmp/wavelog-${CI_PIPELINE_ID}:/src semgrep/semgrep \
     semgrep scan --config p/php --error --quiet \
-      --exclude=system --exclude=install \
-    || { echo "Semgrep reported findings"; STATIC_FAIL=1; }
+      --exclude=system --exclude=install; then
+    SEMGREP_RESULT=ok
+  else
+    echo "Semgrep reported findings"; STATIC_FAIL=1; SEMGREP_RESULT=fail
+  fi
 }
 
 run_lint() {
   echo "=== PHP syntax check (php -l, via built image) ==="
-  docker run --rm wavelog-web:${CI_PIPELINE_ID} bash -c \
-    'find /var/www/html -name "*.php" -print0 | xargs -0 -n1 -P"$(nproc)" php -d display_errors=stderr -l >/dev/null' \
-    && echo "PHP syntax OK" || { echo "PHP lint found errors"; STATIC_FAIL=1; }
+  if docker run --rm wavelog-web:${CI_PIPELINE_ID} bash -c \
+    'find /var/www/html -name "*.php" -print0 | xargs -0 -n1 -P"$(nproc)" php -d display_errors=stderr -l >/dev/null'; then
+    echo "PHP syntax OK"; LINT_RESULT=ok
+  else
+    echo "PHP lint found errors"; STATIC_FAIL=1; LINT_RESULT=fail
+  fi
 }
 
 # Source-only checks need no image, database or Cypress; run and exit.
