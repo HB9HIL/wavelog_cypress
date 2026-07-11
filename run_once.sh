@@ -186,6 +186,7 @@ echo "Wavelog is running on: http://localhost:$((8000 + (${CI_PIPELINE_ID} % 100
 # Set the correct base URL for Cypress
 export CYPRESS_baseUrl="http://localhost:$((8000 + (${CI_PIPELINE_ID} % 1000)))/"
 npx cypress run --browser chromium
+CYPRESS_EXIT=$?
 
 # Stop and remove containers
 docker stop wavelog-web-${CI_PIPELINE_ID} wavelog-db-${CI_PIPELINE_ID} wavelog-mqtt-${CI_PIPELINE_ID}
@@ -197,6 +198,38 @@ docker network rm wavelog_testnet_${CI_PIPELINE_ID}
 
 # Clean up temp files
 cleanup_temp
+
+# ---- Final Report ----
+echo ""
+echo "======================================================"
+echo "  WAVELOG TEST REPORT"
+echo "======================================================"
+if [ -n "$SOURCE" ]; then
+  echo "  Source:    local  ->  $SOURCE"
+else
+  echo "  Repo:      https://github.com/${REPO}  (branch: ${BRANCH})"
+fi
+echo "------------------------------------------------------"
+echo "  PHP:       $PHP"
+echo "  Database:  $DATABASE"
+echo "------------------------------------------------------"
+if [ $CYPRESS_EXIT -eq 0 ]; then
+  echo "  Cypress:   PASSED"
+else
+  echo "  Cypress:   FAILED (exit $CYPRESS_EXIT)"
+fi
+if [ $STATIC_FAIL -eq 0 ]; then
+  echo "  Static:    OK (phpstan / semgrep / lint)"
+else
+  echo "  Static:    ISSUES FOUND (see output above)"
+fi
+echo "======================================================"
+echo ""
+
+exit $CYPRESS_EXIT
+
+# Final report
+
 
 # Report static-check outcome (non-blocking, see above)
 if [ "$STATIC_FAIL" = "1" ]; then
