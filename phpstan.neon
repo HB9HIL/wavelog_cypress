@@ -1,7 +1,9 @@
 parameters:
-    # Level 0 = only the cheapest checks (unknown symbols, wrong arg counts,
-    # duplicate array keys, ...). Raise gradually once the code is clean.
-    level: 0
+    # Level 1 adds "variable might not be defined" and undefined-constant checks
+    # on top of level 0. The two big noise sources it produces on a CodeIgniter 3
+    # codebase (view-scope variables and the framework's runtime constants) are
+    # filtered out below, so what remains are genuine latent bugs in app code.
+    level: 1
     # Match the oldest PHP the app supports so 8.x-only syntax parses correctly.
     phpVersion: 80200
     # The ignore patterns below are broad safety nets; don't fail when one of
@@ -30,12 +32,16 @@ parameters:
         # Class name letter-case mismatches are harmless: PHP resolves class
         # names case-insensitively at runtime.
         - '#referenced with incorrect case#'
-        # echo_table_header_col is defined in several mutually exclusive view
-        # files with differing signatures (1 vs. 2 parameters). PHPStan analyses
-        # them all in the same global scope and checks calls against the wrong
-        # declaration. At runtime CI loads only one of these views per request.
+        # echo_table_header_col / echo_table_col are each defined in several
+        # mutually exclusive view files with differing signatures (1 vs. 2, resp.
+        # 2 vs. 3 parameters). PHPStan analyses them all in the same global scope
+        # and checks calls against the wrong declaration. At runtime CI loads only
+        # one of these views per request.
         -
             message: '#Function echo_table_header_col invoked with#'
+            identifier: arguments.count
+        -
+            message: '#Function echo_table_col invoked with#'
             identifier: arguments.count
         # same for write_activators
         -
@@ -46,3 +52,29 @@ parameters:
         # We ignore any errors in Method Unzip:: because it's a third-party lib
         # which is currently not in our maintenance
         - '#Method Unzip::#'
+        # ----- Level 1 noise filters (CodeIgniter 3 architecture) -----
+        # Controllers pass a $data array to $this->load->view(); CI extract()s it
+        # into the view's local scope, so every such variable looks "undefined" to
+        # PHPStan. This is inherent to CI views, not a bug, so silence it there
+        # only -- variable.undefined in controllers/models/libraries stays active
+        # and catches real "used before assigned" bugs.
+        -
+            identifier: variable.undefined
+            path: /app/application/views/*
+        # CI's front controller (index.php) defines these path/env constants at
+        # runtime before any class loads. PHPStan analyses files in isolation and
+        # never sees index.php, so it flags them as unknown. Harmless.
+        - '#Constant (APPPATH|BASEPATH|FCPATH|VIEWPATH|SELFPATH|ENVIRONMENT|SELF|EXT|CI_VERSION|SYSDIR) not found#'
+        # Redundant defensive checks: isset()/empty()/?? on a variable PHPStan can
+        # prove always exists. Not bugs, just superfluous guards -- filtered so the
+        # gate stays focused on real "used before assigned" issues. The inverse
+        # case (?? on a NEVER defined variable) is a real bug and stays reported.
+        -
+            message: '#in isset\(\) always exists and is not nullable#'
+            identifier: isset.variable
+        -
+            message: '#in empty\(\) always exists and is not falsy#'
+            identifier: empty.variable
+        -
+            message: '#on left side of \?\? always exists and is not nullable#'
+            identifier: nullCoalesce.variable

@@ -152,7 +152,7 @@ print_report() {
 }
 
 run_phpstan() {
-  echo "=== PHPStan (level 0) ==="
+  echo "=== PHPStan (level 1) ==="
   # Pin a current PHPStan (Docker Hub's phpstan/phpstan:latest is stuck on 0.12,
   # which cannot parse PHP 8 syntax). Config lives next to this script.
   if docker run --rm \
