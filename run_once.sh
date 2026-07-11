@@ -50,6 +50,7 @@ BRANCH="${BRANCH:-dev}"
 DATABASE="${DATABASE:-mariadb:11.8}"
 PHP="${PHP:-}"
 BROWSER="${BROWSER:-chromium}"
+COMMIT="${COMMIT:-}"
 ############################
 
 # Firefox is not supported in this setup.
@@ -78,7 +79,13 @@ if [ -n "$SOURCE" ]; then
   rm -f /tmp/wavelog-${CI_PIPELINE_ID}/application/logs/*.php
   rm -f /tmp/wavelog-${CI_PIPELINE_ID}/application/logs/*.log
 else
-  curl -L https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz | tar xz --strip-components=1 -C /tmp/wavelog-${CI_PIPELINE_ID}
+  echo "Cloning Wavelog from Github"
+  git clone --depth 1 --branch "$BRANCH" "$REPO" /tmp/wavelog-${CI_PIPELINE_ID}
+  if [ -n "$COMMIT" ]; then
+    echo "Checking out commit $COMMIT"
+    cd /tmp/wavelog-${CI_PIPELINE_ID}
+    git checkout "$COMMIT"
+  fi
 fi
 
 # Optionally pin a PHP version by patching the downloaded Dockerfile.
