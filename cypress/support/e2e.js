@@ -69,5 +69,8 @@ import './commands'
 // Support for localStorage
 import "cypress-localstorage-commands";
 
+// Fail fast: stop the run as soon as the first test fails (see cypress.config.js).
+import "cypress-fail-fast";
+
 // Alternatively, you can use CommonJS syntax:
 // require('./commands')

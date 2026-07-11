@@ -1,6 +1,7 @@
 {
   "devDependencies": {
     "cypress": "^15.18.0",
+    "cypress-fail-fast": "^8.1.0",
     "cypress-localstorage-commands": "^2.3.0",
     "mqtt": "^5.15.2"
   },
