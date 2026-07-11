@@ -200,30 +200,37 @@ docker network rm wavelog_testnet_${CI_PIPELINE_ID}
 cleanup_temp
 
 # ---- Final Report ----
+BOLD="\033[1m"
+CYAN="\033[1;36m"
+GREEN="\033[1;32m"
+RED="\033[1;31m"
+YELLOW="\033[1;33m"
+RESET="\033[0m"
+
 echo ""
-echo "======================================================"
-echo "  WAVELOG TEST REPORT"
-echo "======================================================"
+echo -e "${CYAN}======================================================${RESET}"
+echo -e "${CYAN}${BOLD}  WAVELOG TEST REPORT${RESET}"
+echo -e "${CYAN}======================================================${RESET}"
 if [ -n "$SOURCE" ]; then
-  echo "  Source:    local  ->  $SOURCE"
+  echo -e "  Source:    ${YELLOW}local  ->  $SOURCE${RESET}"
 else
-  echo "  Repo:      https://github.com/${REPO}  (branch: ${BRANCH})"
+  echo -e "  Repo:      ${YELLOW}https://github.com/${REPO}  (branch: ${BRANCH})${RESET}"
 fi
-echo "------------------------------------------------------"
-echo "  PHP:       $PHP"
-echo "  Database:  $DATABASE"
-echo "------------------------------------------------------"
+echo -e "${CYAN}------------------------------------------------------${RESET}"
+echo -e "  PHP:       ${YELLOW}$PHP${RESET}"
+echo -e "  Database:  ${YELLOW}$DATABASE${RESET}"
+echo -e "${CYAN}------------------------------------------------------${RESET}"
 if [ $CYPRESS_EXIT -eq 0 ]; then
-  echo "  Cypress:   PASSED"
+  echo -e "  Cypress:   ${GREEN}PASSED${RESET}"
 else
-  echo "  Cypress:   FAILED (exit $CYPRESS_EXIT)"
+  echo -e "  Cypress:   ${RED}FAILED (exit $CYPRESS_EXIT)${RESET}"
 fi
 if [ $STATIC_FAIL -eq 0 ]; then
-  echo "  Static:    OK (phpstan / semgrep / lint)"
+  echo -e "  Static:    ${GREEN}OK (phpstan / semgrep / lint)${RESET}"
 else
-  echo "  Static:    ISSUES FOUND (see output above)"
+  echo -e "  Static:    ${RED}ISSUES FOUND (see output above)${RESET}"
 fi
-echo "======================================================"
+echo -e "${CYAN}======================================================${RESET}"
 echo ""
 
 exit $CYPRESS_EXIT
