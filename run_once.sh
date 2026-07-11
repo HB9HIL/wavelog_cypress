@@ -69,10 +69,13 @@ if [ -n "$SOURCE" ]; then
   cp -a "$SOURCE/." /tmp/wavelog-${CI_PIPELINE_ID}/
 
   # Make sure no config.php and database.php are present, so the installer runs and generates them.
+  # Also existing logfiles and .lock files need to be removed.
   rm -f /tmp/wavelog-${CI_PIPELINE_ID}/application/config/config.php
   rm -f /tmp/wavelog-${CI_PIPELINE_ID}/application/config/database.php
   rm -rf /tmp/wavelog-${CI_PIPELINE_ID}/application/config/docker
   rm -f /tmp/wavelog-${CI_PIPELINE_ID}/install/.lock
+  rm -f /tmp/wavelog-${CI_PIPELINE_ID}/application/logs/*.php
+  rm -f /tmp/wavelog-${CI_PIPELINE_ID}/application/logs/*.log
 else
   curl -L https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz | tar xz --strip-components=1 -C /tmp/wavelog-${CI_PIPELINE_ID}
 fi
