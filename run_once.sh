@@ -67,6 +67,12 @@ if [ -n "$SOURCE" ]; then
   fi
   echo "Using local Wavelog source: $SOURCE"
   cp -a "$SOURCE/." /tmp/wavelog-${CI_PIPELINE_ID}/
+
+  # Make sure no config.php and database.php are present, so the installer runs and generates them.
+  rm -f /tmp/wavelog-${CI_PIPELINE_ID}/application/config/config.php
+  rm -f /tmp/wavelog-${CI_PIPELINE_ID}/application/config/database.php
+  rm -rf /tmp/wavelog-${CI_PIPELINE_ID}/application/config/docker
+  rm -f /tmp/wavelog-${CI_PIPELINE_ID}/install/.lock
 else
   curl -L https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz | tar xz --strip-components=1 -C /tmp/wavelog-${CI_PIPELINE_ID}
 fi
