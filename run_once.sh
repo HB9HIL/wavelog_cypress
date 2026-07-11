@@ -18,11 +18,12 @@ Everything is configured via environment variables:
   BRANCH    Wavelog branch to pull (ignored when SOURCE is set). Default: dev
   SOURCE    Path to a local Wavelog checkout to test instead of downloading.
             It is copied into a temp dir, so your working tree is untouched.
-  ONLY      Run a single stage and skip Cypress. One of:
+  ONLY      Run a single stage. One of:
               phpstan  PHPStan only        (source only, no image build)
               semgrep  semgrep SQLi scan   (source only, no image build)
               lint     php -l syntax check (builds the web image)
               static   all three checks    (no database / Cypress)
+              cypress  Cypress e2e only    (build + DB, no static checks)
             Unset runs the full pipeline (build + static checks + Cypress).
 
 Examples:
@@ -118,7 +119,9 @@ print_report() {
   else
     echo -e "  Cypress:   ${RED}FAILED (exit $CYPRESS_EXIT)${RESET}"
   fi
-  if [ $STATIC_FAIL -eq 0 ]; then
+  if [ "$ONLY" = "cypress" ]; then
+    echo -e "  Static:    ${YELLOW}SKIPPED (ONLY=cypress)${RESET}"
+  elif [ $STATIC_FAIL -eq 0 ]; then
     echo -e "  Static:    ${GREEN}OK${RESET}"
   else
     echo -e "  Static:    ${RED}ISSUES FOUND (see output above)${RESET}"
@@ -178,7 +181,7 @@ EOF
 
 # For a full run, bring up network/MQTT/DB early so the database initializes
 # while the image builds and npm installs. Skipped for the static-only modes.
-if [ -z "$ONLY" ]; then
+if [ -z "$ONLY" ] || [ "$ONLY" = "cypress" ]; then
   # Create Docker network
   docker network create wavelog_testnet_${CI_PIPELINE_ID}
 
@@ -239,9 +242,12 @@ if [ "$ONLY" = "static" ]; then
 fi
 
 # ---- Full run: static checks (non-blocking) then Cypress e2e ----
-run_lint
-run_phpstan
-run_semgrep
+# ONLY=cypress skips the static checks and runs the e2e suite only.
+if [ "$ONLY" != "cypress" ]; then
+  run_lint
+  run_phpstan
+  run_semgrep
+fi
 
 # Start web container
 docker run -d \
