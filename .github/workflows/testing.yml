@@ -77,6 +77,36 @@ jobs:
           path: image.tar.gz
           retention-days: 1
 
+  # Install the node deps and the Cypress binary once, then publish them to the
+  # cache (keyed on package-lock.json) so the various test matrix combos restore them
+  # instead of each running npm ci and downloading Cypress. Runs in parallel with
+  # build; the test job waits on both. setup-node's cache: npm only caches the
+  # ~/.npm download dir (a cold npm ci); node_modules and ~/.cache/Cypress are
+  # what actually let the test job skip the install entirely.
+  deps:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - name: Cache node_modules and Cypress binary
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            ~/.cache/Cypress
+          key: deps-${{ hashFiles('package-lock.json') }}
+      # npm ci's postinstall pulls the Cypress binary into ~/.cache/Cypress, so a
+      # single install warms both cached paths. Skipped when the cache already hit.
+      - name: Install dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: npm ci
+
   # Syntax check every PHP file with the exact PHP version the image ships.
   php-lint:
     runs-on: ubuntu-latest
@@ -148,7 +178,7 @@ jobs:
   # its own isolated VM.
   test:
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, deps]
     strategy:
       fail-fast: false
       matrix:
@@ -179,6 +209,16 @@ jobs:
           node-version: 24
           cache: npm
 
+      # Populated by the deps job; a hit lets us skip npm ci below entirely.
+      - name: Restore node_modules and Cypress binary
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            node_modules
+            ~/.cache/Cypress
+          key: deps-${{ hashFiles('package-lock.json') }}
+
       - name: Start database
         run: |
           docker network create wavelog_testnet
@@ -195,8 +235,11 @@ jobs:
             $DB_ENV \
             ${{ matrix.db.image }}
 
-      # DB initializes in the background while npm installs
+      # Normally a no-op: the deps job primed the cache and the restore above hit.
+      # On a cache miss this falls back to npm ci, overlapping with the background
+      # DB init.
       - name: Install dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
         run: npm ci
 
       - name: Wait for database
