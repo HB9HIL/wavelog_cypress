@@ -8,6 +8,7 @@ echo "Using Pipeline ID: $CI_PIPELINE_ID"
 # Configurable via environment variables; defaults give a plain MariaDB 11.8 run.
 #   DATABASE  DB image to test against (e.g. mysql:8.4, mariadb:11.4)
 #   PHP       PHP version to pin (e.g. 8.3); empty keeps the Dockerfile's default
+#   BROWSER   Cypress browser to run (chromium, chrome, edge, electron); firefox unsupported
 #   REPO      Wavelog repo to pull (ignored when SOURCE is set)
 #   BRANCH    Wavelog branch to pull (ignored when SOURCE is set)
 #   SOURCE    Path to a local Wavelog checkout to test instead of downloading.
@@ -25,7 +26,14 @@ REPO="${REPO:-wavelog/wavelog}"
 BRANCH="${BRANCH:-dev}"
 DATABASE="${DATABASE:-mariadb:11.8}"
 PHP="${PHP:-}"
+BROWSER="${BROWSER:-chromium}"
 ############################
+
+# Firefox is not supported in this setup.
+if [ "$BROWSER" = "firefox" ]; then
+  echo "BROWSER=firefox is not supported here. Use chromium, chrome, edge or electron. The browser must be available on your machine."
+  exit 1
+fi
 
 # Obtain the Wavelog source in a temp dir. Everything below mutates it (PHP pin,
 # MQTT config), so with SOURCE we copy the local checkout rather than use it in
@@ -185,7 +193,7 @@ echo "Wavelog is running on: http://localhost:$((8000 + (${CI_PIPELINE_ID} % 100
 
 # Set the correct base URL for Cypress
 export CYPRESS_baseUrl="http://localhost:$((8000 + (${CI_PIPELINE_ID} % 1000)))/"
-npx cypress run --browser chromium
+npx cypress run --browser "$BROWSER"
 CYPRESS_EXIT=$?
 
 # Stop and remove containers
@@ -219,6 +227,7 @@ fi
 echo -e "${CYAN}------------------------------------------------------${RESET}"
 echo -e "  PHP:       ${YELLOW}${PHP:-default from Dockerfile}${RESET}"
 echo -e "  Database:  ${YELLOW}$DATABASE${RESET}"
+echo -e "  Browser:   ${YELLOW}$BROWSER${RESET}"
 echo -e "${CYAN}------------------------------------------------------${RESET}"
 if [ $CYPRESS_EXIT -eq 0 ]; then
   echo -e "  Cypress:   ${GREEN}PASSED${RESET}"
