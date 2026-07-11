@@ -95,7 +95,7 @@ jobs:
           cache: npm
       - name: Cache node_modules and Cypress binary
         id: cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             node_modules
@@ -212,7 +212,7 @@ jobs:
       # Populated by the deps job; a hit lets us skip npm ci below entirely.
       - name: Restore node_modules and Cypress binary
         id: cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             node_modules
