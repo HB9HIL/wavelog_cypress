@@ -64,6 +64,48 @@ fi
 STATIC_FAIL=0
 cleanup_temp() { rm -rf /tmp/wavelog-${CI_PIPELINE_ID}; }
 
+# ---------------------------------------------------------------------------
+# Final report. Shown for every mode, including ONLY=... runs. Cypress is
+# marked SKIPPED unless it actually ran (CYPRESS_EXIT is set by the full run).
+# ---------------------------------------------------------------------------
+print_report() {
+  local BOLD="\033[1m"
+  local CYAN="\033[1;36m"
+  local GREEN="\033[1;32m"
+  local RED="\033[1;31m"
+  local YELLOW="\033[1;33m"
+  local RESET="\033[0m"
+
+  echo ""
+  echo -e "${CYAN}======================================================${RESET}"
+  echo -e "${CYAN}${BOLD}  WAVELOG TEST REPORT${RESET}"
+  echo -e "${CYAN}======================================================${RESET}"
+  if [ -n "$SOURCE" ]; then
+    echo -e "  Source:    ${YELLOW}local  ->  $SOURCE${RESET}"
+  else
+    echo -e "  Repo:      ${YELLOW}https://github.com/${REPO}  (branch: ${BRANCH})${RESET}"
+  fi
+  echo -e "${CYAN}------------------------------------------------------${RESET}"
+  echo -e "  PHP:       ${YELLOW}${PHP:-default from Dockerfile}${RESET}"
+  echo -e "  Database:  ${YELLOW}$DATABASE${RESET}"
+  echo -e "  Browser:   ${YELLOW}$BROWSER${RESET}"
+  echo -e "${CYAN}------------------------------------------------------${RESET}"
+  if [ -z "${CYPRESS_EXIT:-}" ]; then
+    echo -e "  Cypress:   ${YELLOW}SKIPPED (ONLY=$ONLY)${RESET}"
+  elif [ "$CYPRESS_EXIT" -eq 0 ]; then
+    echo -e "  Cypress:   ${GREEN}PASSED${RESET}"
+  else
+    echo -e "  Cypress:   ${RED}FAILED (exit $CYPRESS_EXIT)${RESET}"
+  fi
+  if [ $STATIC_FAIL -eq 0 ]; then
+    echo -e "  Static:    ${GREEN}OK${RESET}"
+  else
+    echo -e "  Static:    ${RED}ISSUES FOUND (see output above)${RESET}"
+  fi
+  echo -e "${CYAN}======================================================${RESET}"
+  echo ""
+}
+
 run_phpstan() {
   echo "=== PHPStan (level 0) ==="
   # Pin a current PHPStan (Docker Hub's phpstan/phpstan:latest is stuck on 0.12,
@@ -97,8 +139,8 @@ run_lint() {
 }
 
 # Source-only checks need no image, database or Cypress; run and exit.
-if [ "$ONLY" = "phpstan" ]; then run_phpstan; cleanup_temp; exit $STATIC_FAIL; fi
-if [ "$ONLY" = "semgrep" ]; then run_semgrep; cleanup_temp; exit $STATIC_FAIL; fi
+if [ "$ONLY" = "phpstan" ]; then run_phpstan; cleanup_temp; print_report; exit $STATIC_FAIL; fi
+if [ "$ONLY" = "semgrep" ]; then run_semgrep; cleanup_temp; print_report; exit $STATIC_FAIL; fi
 
 # Enable MQTT in the image so the MQTT e2e test has something to assert on.
 # The installer copies install/config/config.php into the docker config dir, so
@@ -162,6 +204,7 @@ if [ "$ONLY" = "lint" ]; then
   run_lint
   docker rmi wavelog-web:${CI_PIPELINE_ID}
   cleanup_temp
+  print_report
   exit $STATIC_FAIL
 fi
 if [ "$ONLY" = "static" ]; then
@@ -170,6 +213,7 @@ if [ "$ONLY" = "static" ]; then
   run_semgrep
   docker rmi wavelog-web:${CI_PIPELINE_ID}
   cleanup_temp
+  print_report
   exit $STATIC_FAIL
 fi
 
@@ -208,46 +252,6 @@ docker network rm wavelog_testnet_${CI_PIPELINE_ID}
 cleanup_temp
 
 # ---- Final Report ----
-BOLD="\033[1m"
-CYAN="\033[1;36m"
-GREEN="\033[1;32m"
-RED="\033[1;31m"
-YELLOW="\033[1;33m"
-RESET="\033[0m"
-
-echo ""
-echo -e "${CYAN}======================================================${RESET}"
-echo -e "${CYAN}${BOLD}  WAVELOG TEST REPORT${RESET}"
-echo -e "${CYAN}======================================================${RESET}"
-if [ -n "$SOURCE" ]; then
-  echo -e "  Source:    ${YELLOW}local  ->  $SOURCE${RESET}"
-else
-  echo -e "  Repo:      ${YELLOW}https://github.com/${REPO}  (branch: ${BRANCH})${RESET}"
-fi
-echo -e "${CYAN}------------------------------------------------------${RESET}"
-echo -e "  PHP:       ${YELLOW}${PHP:-default from Dockerfile}${RESET}"
-echo -e "  Database:  ${YELLOW}$DATABASE${RESET}"
-echo -e "  Browser:   ${YELLOW}$BROWSER${RESET}"
-echo -e "${CYAN}------------------------------------------------------${RESET}"
-if [ $CYPRESS_EXIT -eq 0 ]; then
-  echo -e "  Cypress:   ${GREEN}PASSED${RESET}"
-else
-  echo -e "  Cypress:   ${RED}FAILED (exit $CYPRESS_EXIT)${RESET}"
-fi
-if [ $STATIC_FAIL -eq 0 ]; then
-  echo -e "  Static:    ${GREEN}OK (phpstan / semgrep / lint)${RESET}"
-else
-  echo -e "  Static:    ${RED}ISSUES FOUND (see output above)${RESET}"
-fi
-echo -e "${CYAN}======================================================${RESET}"
-echo ""
+print_report
 
 exit $CYPRESS_EXIT
-
-# Final report
-
-
-# Report static-check outcome (non-blocking, see above)
-if [ "$STATIC_FAIL" = "1" ]; then
-  echo "NOTE: one or more static checks (php lint / phpstan / semgrep) reported issues — see output above."
-fi
