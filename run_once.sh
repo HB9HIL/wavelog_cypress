@@ -1,26 +1,47 @@
 #!/bin/bash
 
+# Print usage and exit. Options are passed as environment variables.
+usage() {
+  cat <<'EOF'
+Usage: [VAR=value ...] ./run_once.sh
+
+Run the Wavelog test pipeline (build + static checks + Cypress e2e).
+Everything is configured via environment variables:
+
+  DATABASE  DB image to test against (e.g. mysql:8.4, mariadb:11.4)
+            Default: mariadb:11.8
+  PHP       PHP version to pin (e.g. 8.3); empty keeps the Dockerfile's default
+  BROWSER   Cypress browser to run (chromium, chrome, edge, electron); firefox
+            unsupported. Must be installed on your machine. Default: chromium
+  REPO      Wavelog repo to pull (ignored when SOURCE is set)
+            Default: wavelog/wavelog
+  BRANCH    Wavelog branch to pull (ignored when SOURCE is set). Default: dev
+  SOURCE    Path to a local Wavelog checkout to test instead of downloading.
+            It is copied into a temp dir, so your working tree is untouched.
+  ONLY      Run a single stage and skip Cypress. One of:
+              phpstan  PHPStan only        (source only, no image build)
+              semgrep  semgrep SQLi scan   (source only, no image build)
+              lint     php -l syntax check (builds the web image)
+              static   all three checks    (no database / Cypress)
+            Unset runs the full pipeline (build + static checks + Cypress).
+
+Examples:
+  DATABASE=mysql:8.4 PHP=8.3 ./run_once.sh
+  ONLY=phpstan ./run_once.sh
+  BROWSER=chrome ./run_once.sh
+EOF
+}
+
+case "$1" in
+  -h|--help) usage; exit 0 ;;
+esac
+
 # Set manually a random Pipeline ID
 export CI_PIPELINE_ID=$((RANDOM + 10000))
 echo "Using Pipeline ID: $CI_PIPELINE_ID"
 
 ############################
-# Configurable via environment variables; defaults give a plain MariaDB 11.8 run.
-#   DATABASE  DB image to test against (e.g. mysql:8.4, mariadb:11.4)
-#   PHP       PHP version to pin (e.g. 8.3); empty keeps the Dockerfile's default
-#   BROWSER   Cypress browser to run (chromium, chrome, edge, electron); firefox unsupported
-#   REPO      Wavelog repo to pull (ignored when SOURCE is set)
-#   BRANCH    Wavelog branch to pull (ignored when SOURCE is set)
-#   SOURCE    Path to a local Wavelog checkout to test instead of downloading.
-#             It is copied into a temp dir, so your working tree is untouched.
-#   ONLY      Run a single stage and skip Cypress. One of:
-#               phpstan  PHPStan only        (source only, no image build)
-#               semgrep  semgrep SQLi scan   (source only, no image build)
-#               lint     php -l syntax check (builds the web image)
-#               static   all three checks    (no database / Cypress)
-#             Unset runs the full pipeline (build + static checks + Cypress).
-# Example: DATABASE=mysql:8.4 PHP=8.3 ./run_once.sh
-# Example: ONLY=phpstan ./run_once.sh
+# Configuration via environment variables; run with --help for details.
 ############################
 REPO="${REPO:-wavelog/wavelog}"
 BRANCH="${BRANCH:-dev}"
