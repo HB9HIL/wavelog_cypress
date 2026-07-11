@@ -217,7 +217,7 @@ else
   echo -e "  Repo:      ${YELLOW}https://github.com/${REPO}  (branch: ${BRANCH})${RESET}"
 fi
 echo -e "${CYAN}------------------------------------------------------${RESET}"
-echo -e "  PHP:       ${YELLOW}$PHP${RESET}"
+echo -e "  PHP:       ${YELLOW}${PHP:-default from Dockerfile}${RESET}"
 echo -e "  Database:  ${YELLOW}$DATABASE${RESET}"
 echo -e "${CYAN}------------------------------------------------------${RESET}"
 if [ $CYPRESS_EXIT -eq 0 ]; then
