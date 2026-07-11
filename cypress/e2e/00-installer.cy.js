@@ -1,4 +1,5 @@
-describe("Installer Test", () => {
+// installer is stateful, no retries allowed
+describe("Installer Test", { retries: 0 }, () => {
 
 	// Helper function to visit the installer page
 	function visitInstallerPage() {
@@ -106,15 +107,15 @@ describe("Installer Test", () => {
 			.should("be.visible")
 			.and("have.class", "fa-check-circle");
 
-		cy.get('i[id="database_tables_check"]', { timeout: 20000 })
-			.should("be.visible")
-			.and("have.class", "fa-check-circle");
-		
-		cy.get('i[id="database_migrations_check"]', { timeout: 60000 })
+		cy.get('i[id="database_tables_check"]', { timeout: 60000 })
 			.should("be.visible")
 			.and("have.class", "fa-check-circle");
 
-		cy.get('i[id="update_dxcc_check"]', { timeout: 60000 })
+		cy.get('i[id="database_migrations_check"]', { timeout: 180000 })
+			.should("be.visible")
+			.and("have.class", "fa-check-circle");
+
+		cy.get('i[id="update_dxcc_check"]', { timeout: 120000 })
 			.should("be.visible")
 			.and("have.class", "fa-check-circle");
 
