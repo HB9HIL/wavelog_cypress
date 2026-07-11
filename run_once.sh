@@ -30,6 +30,7 @@ Examples:
   DATABASE=mysql:8.4 PHP=8.3 ./run_once.sh
   ONLY=phpstan ./run_once.sh
   BROWSER=chrome ./run_once.sh
+
 EOF
 }
 
