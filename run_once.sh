@@ -80,7 +80,14 @@ if [ -n "$SOURCE" ]; then
   rm -f /tmp/wavelog-${CI_PIPELINE_ID}/application/logs/*.log
 else
   echo "Cloning Wavelog from Github"
-  git clone --depth 1 --branch "$BRANCH" "$REPO.git" /tmp/wavelog-${CI_PIPELINE_ID}
+  # REPO is owner/name (e.g. wavelog/wavelog); build the full GitHub URL here.
+  # Abort right away when the clone fails - everything after this point would
+  # only cascade into confusing follow-up errors on an empty source dir.
+  if ! git clone --depth 1 --branch "$BRANCH" "https://github.com/${REPO}.git" /tmp/wavelog-${CI_PIPELINE_ID}; then
+    echo "Cloning https://github.com/${REPO}.git (branch: $BRANCH) failed"
+    rm -rf /tmp/wavelog-${CI_PIPELINE_ID}
+    exit 1
+  fi
   if [ -n "$COMMIT" ]; then
     echo "Checking out commit $COMMIT"
     cd /tmp/wavelog-${CI_PIPELINE_ID}
