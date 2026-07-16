@@ -80,7 +80,7 @@ if [ -n "$SOURCE" ]; then
   rm -f /tmp/wavelog-${CI_PIPELINE_ID}/application/logs/*.log
 else
   echo "Cloning Wavelog from Github"
-  git clone --depth 1 --branch "$BRANCH" "$REPO" /tmp/wavelog-${CI_PIPELINE_ID}
+  git clone --depth 1 --branch "$BRANCH" "$REPO.git" /tmp/wavelog-${CI_PIPELINE_ID}
   if [ -n "$COMMIT" ]; then
     echo "Checking out commit $COMMIT"
     cd /tmp/wavelog-${CI_PIPELINE_ID}

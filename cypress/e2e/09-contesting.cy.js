@@ -285,3 +285,172 @@ describe("Contesting engine window management", () => {
 		});
 	});
 });
+
+// End-to-end coverage for the legacy contest import (controller
+// Contesting_import): QSOs that carry a CONTEST_ID but are not yet linked to
+// any contest session can be imported as historical contest sessions.
+//
+// The flow under test: seed the logbook via ADIF import with contest QSOs,
+// preview the detected groups on /contesting_import (grouped by contest +
+// station and split into time segments: a new segment starts when consecutive
+// QSOs are >= 72h apart AND in different ISO calendar weeks), import them and
+// verify the created sessions in the contest manager.
+//
+// The fixture holds 5 QSOs:
+//   - 2x CQ-WW-SSB on the 2021 contest weekend  -> segment 1
+//   - 2x CQ-WW-SSB on the 2022 contest weekend  -> segment 2 (>72h + new week)
+//   - 1x unknown contest id "CYPRESS-TEST"      -> mapped to "Other"
+// => the preview must show 3 groups, the import must create 3 sessions with
+//    5 linked QSOs in total.
+describe("Contesting legacy import", () => {
+	before(() => {
+		cy.setCookie('language', 'english');
+		cy.login();
+		cy.getCookies().then(cookies => {
+			cy.writeFile('cypress/fixtures/cookies.json', cookies);
+		});
+	});
+
+	beforeEach(() => {
+		cy.readFile('cypress/fixtures/cookies.json').then(cookies => {
+			cookies.forEach(cookie => {
+				cy.setCookie(cookie.name, cookie.value);
+			});
+		});
+	});
+
+	it("Imports an ADIF log with historical contest QSOs", () => {
+		cy.visit("/index.php/adif");
+
+		cy.get("#userfile")
+			.selectFile("cypress/fixtures/contest_legacy_import.adi");
+
+		// Ignore station/grid checks so the import always goes through
+		cy.get("#skipStationCheck").check({ force: true });
+		cy.get("#skipGridCheck").check({ force: true });
+
+		cy.get("#prepare_sub").click();
+
+		cy.get("body", { timeout: 20000 })
+			.contains("Yay, it's imported!")
+			.should("be.visible");
+	});
+
+	it("Links to the legacy import from the contest dashboard", () => {
+		cy.visit("/index.php/contesting");
+
+		// Regular per-user import link (href$= so the admin /all link is not matched)
+		cy.get('a[href$="contesting_import"]')
+			.should("be.visible")
+			.and("contain.text", "Import historical contests");
+
+		// The test user is an admin, so the all-users variant is offered too
+		cy.get('a[href*="contesting_import/all"]').should("exist");
+	});
+
+	it("Previews the historical contest groups with segmentation", () => {
+		cy.visit("/index.php/contesting_import");
+
+		cy.get("h2").contains("Import Historical Contests").should("be.visible");
+
+		// The two CQ-WW-SSB weekends are >72h apart in different ISO weeks, so
+		// they must show up as two separate sessions (2021 and 2022), 2 QSOs each.
+		cy.get('#import-legacy-form tbody tr:contains("CQ-WW-SSB")')
+			.should("have.length", 2)
+			.then(($rows) => {
+				const years = [...$rows].map((r) => r.cells[3].innerText.trim());
+				expect(years).to.have.members(["2021", "2022"]);
+				[...$rows].forEach((r) => {
+					expect(r.cells[7].innerText.trim(), "QSO count per segment").to.eq("2");
+				});
+			});
+
+		// The known contest id resolves to its display name from the contest table
+		cy.get("#import-legacy-form tbody")
+			.should("contain.text", "CQ WW DX Contest (SSB)");
+
+		// The unknown contest id falls back to "Other" and is flagged as such
+		cy.contains("#import-legacy-form tbody tr", "CYPRESS-TEST").within(() => {
+			cy.get(".badge").should("contain.text", "Other");
+			cy.get("td").eq(7).should("have.text", "1");
+		});
+
+		// All groups are preselected; the select-all checkbox toggles them
+		cy.get('input[name="groups[]"]').should("have.length", 3);
+		cy.get('input[name="groups[]"]:checked').should("have.length", 3);
+		cy.get("#select-all").uncheck();
+		cy.get('input[name="groups[]"]:checked').should("have.length", 0);
+		cy.get("#select-all").check();
+		cy.get('input[name="groups[]"]:checked').should("have.length", 3);
+	});
+
+	it("Shows the admin preview for all users", () => {
+		cy.visit("/index.php/contesting_import/all");
+
+		cy.get("h2")
+			.contains("Import Historical Contests (All Users)")
+			.should("be.visible");
+		cy.get(".alert-warning").should("contain.text", "Admin mode:");
+		cy.get('#import-legacy-form tbody tr:contains("CQ-WW-SSB")')
+			.should("have.length", 2);
+	});
+
+	it("Blocks the import when no group is selected", () => {
+		cy.visit("/index.php/contesting_import");
+
+		// With nothing selected the submit handler alerts and prevents the POST
+		cy.window().then((win) => {
+			cy.stub(win, "alert").as("noSelectionAlert");
+		});
+
+		cy.get("#select-all").uncheck();
+		cy.get('input[name="groups[]"]:checked').should("have.length", 0);
+		cy.get("#import-btn").click();
+
+		cy.get("@noSelectionAlert").should("have.been.calledOnce");
+		cy.url().should("include", "/contesting_import");
+	});
+
+	it("Imports the selected historical contests", () => {
+		cy.visit("/index.php/contesting_import");
+		cy.get('input[name="groups[]"]:checked').should("have.length", 3);
+
+		// The form asks for confirmation before submitting
+		cy.window().then((win) => {
+			cy.stub(win, "confirm").returns(true);
+		});
+
+		cy.get("#import-btn").click();
+
+		// Redirects back to the manager: 3 sessions (2x CQ-WW-SSB segments +
+		// 1x unknown -> Other) with all 5 QSOs linked.
+		cy.url().should("match", /\/contesting\/?$/);
+		cy.get(".alert-message")
+			.should("contain.text", "3 session(s) created, 5 QSO(s) linked.");
+	});
+
+	it("Shows the imported sessions in the contest manager", () => {
+		cy.visit("/index.php/contesting");
+
+		cy.get("#user_contests_table")
+			.should("contain.text", "CQ WW DX Contest (SSB)")
+			.and("contain.text", "Imported from logbook");
+
+		// One row per imported session
+		cy.get('#user_contests_table tbody tr:contains("Imported from logbook")')
+			.should("have.length", 3);
+	});
+
+	it("Redirects with a warning when nothing is left to import", () => {
+		// All groups are linked now, so both preview pages bail out to the manager
+		cy.visit("/index.php/contesting_import");
+		cy.url().should("match", /\/contesting\/?$/);
+		cy.get(".alert-warning")
+			.should("contain.text", "No historical contests found");
+
+		cy.visit("/index.php/contesting_import/all");
+		cy.url().should("match", /\/contesting\/?$/);
+		cy.get(".alert-warning")
+			.should("contain.text", "No historical contests found");
+	});
+});
