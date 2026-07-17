@@ -22,6 +22,7 @@ describe("API v2", () => {
 		"station:read", "station:write", "station:delete",
 		"radio:read", "radio:write", "radio:delete",
 		"statistic:read",
+		"lookup:read", "club:read",
 	];
 	// A read-only token: reads succeed, writes/deletes must be refused.
 	const READ_SCOPES = ["qso:read", "station:read", "radio:read", "statistic:read"];
@@ -252,6 +253,33 @@ describe("API v2", () => {
 				expect(response.body.data).to.be.an("array").and.have.length.greaterThan(0);
 				expect(response.body.meta).to.include({ page: 1, per_page: 100 });
 				expect(response.body.meta.count).to.be.a("number");
+				// Pagination totals let a client find the last page without probing.
+				expect(response.body.meta.total).to.be.a("number");
+				expect(response.body.meta.total_pages).to.be.a("number");
+				expect(response.body.meta).to.have.property("has_more");
+			});
+		});
+
+		it("GET /api/v2/qso pagination reports total_pages and has_more", () => {
+			// Page 1 of 1-per-page: if there is more than one QSO, has_more is true
+			// and total_pages equals total; the last page reports has_more false.
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?per_page=1&page=1`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				const meta = response.body.meta;
+				expect(meta.total_pages).to.eq(meta.total);
+				expect(meta.has_more).to.eq(meta.total > 1);
+
+				// Fetch the last page and confirm has_more flips to false.
+				cy.request({
+					method: "GET",
+					url: `${API}/qso?per_page=1&page=${meta.total_pages}`,
+					headers: auth(fullKey),
+				}).then((last) => {
+					expect(last.body.meta.has_more).to.eq(false);
+				});
 			});
 		});
 
@@ -762,6 +790,502 @@ describe("API v2", () => {
 			}).then((response) => {
 				expect(response.status).to.eq(403);
 				expect(response.body.error).to.have.property("code", "insufficient_scope");
+			});
+		});
+	});
+
+	// --- QSO ADIF import & export (qso:write / qso:read) -------------------
+
+	describe("QSO ADIF", () => {
+		const ADIF_CALL = "V2ADIF1";
+		// A single, self-contained ADIF record. Lengths must match the values.
+		const ADIF = `<CALL:${ADIF_CALL.length}>${ADIF_CALL}<QSO_DATE:8>20240104<TIME_ON:4>1230<BAND:3>20m<MODE:3>FT8<EOR>`;
+
+		it("POST import_type=adif with dryrun parses without importing", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				body: {
+					import_type: "adif",
+					station_profile_id: STATION_PROFILE_ID,
+					dryrun: true,
+					adif: ADIF,
+				},
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.include({ dryrun: true, parsed: 1 });
+			});
+		});
+
+		it("POST import_type=adif imports the QSO (201)", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				body: {
+					import_type: "adif",
+					station_profile_id: STATION_PROFILE_ID,
+					adif: ADIF,
+				},
+			}).then((response) => {
+				expect(response.status).to.eq(201);
+				expect(response.body.data.parsed).to.eq(1);
+				expect(response.body.data.imported).to.eq(1);
+				expect(response.body.data.skipped).to.eq(0);
+			});
+		});
+
+		it("POST import_type=adif again skips the duplicate", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				body: {
+					import_type: "adif",
+					station_profile_id: STATION_PROFILE_ID,
+					adif: ADIF,
+				},
+			}).then((response) => {
+				expect(response.status).to.eq(201);
+				expect(response.body.data.imported).to.eq(0);
+				expect(response.body.data.skipped).to.eq(1);
+			});
+		});
+
+		it("GET /api/v2/qso?format=adif exports incrementally", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?format=adif&since_id=0&station_id=${STATION_PROFILE_ID}`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.have.property("lastfetchedid");
+				expect(response.body.data.exported).to.be.a("number").and.to.be.greaterThan(0);
+				expect(response.body.data.adif).to.be.a("string").and.to.include(ADIF_CALL);
+				// ADIF shares the list's pagination meta.
+				expect(response.body.meta).to.have.property("total");
+				expect(response.body.meta).to.have.property("has_more");
+			});
+		});
+
+		it("GET /api/v2/qso per_page is honoured up to the 5000 cap (both formats)", () => {
+			// Both JSON and ADIF share a 5000 max; an over-large per_page clamps.
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?per_page=1000`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta.per_page).to.eq(1000);
+			});
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?per_page=99999`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta.per_page).to.eq(5000);
+			});
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?format=adif&per_page=99999`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta.per_page).to.eq(5000);
+			});
+		});
+
+		it("GET /api/v2/qso?limit= returns the newest N QSOs", () => {
+			// limit=1 must return exactly the newest QSO, matching page 1 of a
+			// per_page=1 request (both are newest-first).
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?limit=1`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.have.length(1);
+				expect(response.body.meta.per_page).to.eq(1);
+				const newest = response.body.data[0].id;
+
+				cy.request({
+					method: "GET",
+					url: `${API}/qso?per_page=1&page=1`,
+					headers: auth(fullKey),
+				}).then((cmp) => {
+					expect(cmp.body.data[0].id).to.eq(newest);
+				});
+			});
+		});
+
+		it("GET /api/v2/qso?limit=0 returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?limit=0`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("GET /api/v2/qso applies the common filters (json)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?station_id=${STATION_PROFILE_ID}&since_id=0&band=20m&per_page=5`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.be.an("array");
+				expect(response.body.meta.total).to.be.a("number");
+				response.body.data.forEach((qso) => expect(qso.band).to.eq("20m"));
+			});
+		});
+
+		it("GET /api/v2/qso?mode= filters by mode or submode", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?mode=SSB&per_page=5`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.be.an("array");
+				// Every row matches on the main mode or the submode.
+				response.body.data.forEach((qso) =>
+					expect(qso.mode === "SSB" || qso.submode === "SSB").to.eq(true)
+				);
+			});
+		});
+
+		it("GET /api/v2/qso?station_id= of a foreign station returns 403", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?station_id=999999`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(403);
+				expect(response.body.error).to.have.property("code", "forbidden");
+			});
+		});
+
+		it("GET /api/v2/qso?since_id=abc returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?since_id=abc`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("GET /api/v2/qso?qsl_filter=bogus returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?qsl_filter=bogus`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("POST with an unknown import_type returns 400", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				body: { import_type: "xml", station_profile_id: STATION_PROFILE_ID },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("GET /api/v2/qso?format=bogus returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?format=bogus`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		after(() => {
+			// Remove the imported QSO so re-runs start clean.
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?per_page=500`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				const hit = response.body.data.find((q) => q.call === ADIF_CALL);
+				if (hit) {
+					cy.request({
+						method: "DELETE",
+						url: `${API}/qso/${hit.id}`,
+						headers: auth(fullKey),
+					});
+				}
+			});
+		});
+	});
+
+	// --- QSO bulk JSON import (qso:write) ----------------------------------
+
+	describe("QSO JSON bulk", () => {
+		const CALLS = ["V2JB1", "V2JB2"];
+		const qsos = [
+			{ call: CALLS[0], band: "20m", mode: "FT8", qso_date: "2024-02-01", time_on: "1200" },
+			{ call: CALLS[1], band: "40m", mode: "CW", qso_date: "2024-02-01", time_on: "1201" },
+		];
+
+		it("POST with a qsos array and dryrun validates without importing", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				body: { station_profile_id: STATION_PROFILE_ID, dryrun: true, qsos },
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.include({ dryrun: true, parsed: 2 });
+			});
+		});
+
+		it("POST with a qsos array imports them all (201)", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				body: { station_profile_id: STATION_PROFILE_ID, qsos },
+			}).then((response) => {
+				expect(response.status).to.eq(201);
+				expect(response.body.data.parsed).to.eq(2);
+				expect(response.body.data.imported).to.eq(2);
+			});
+		});
+
+		it("POST with a missing field flags the offending row index (400)", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+				body: {
+					station_profile_id: STATION_PROFILE_ID,
+					qsos: [
+						{ call: "V2JBOK", band: "20m", mode: "FT8", qso_date: "2024-02-01", time_on: "1200" },
+						{ band: "40m", mode: "CW", qso_date: "2024-02-01", time_on: "1201" }, // no call
+					],
+				},
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+				expect(response.body.error.details).to.have.property("index", 1);
+			});
+		});
+
+		it("POST with an empty qsos array returns 400", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+				body: { station_profile_id: STATION_PROFILE_ID, qsos: [] },
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		after(() => {
+			// Remove the imported bulk QSOs so re-runs start clean.
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?per_page=500`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				response.body.data
+					.filter((q) => CALLS.includes(q.call))
+					.forEach((q) =>
+						cy.request({ method: "DELETE", url: `${API}/qso/${q.id}`, headers: auth(fullKey) })
+					);
+			});
+		});
+	});
+
+	// --- Lookup resource (lookup:read, read-only) --------------------------
+
+	describe("Lookup", () => {
+		it("GET /api/v2/lookup/{callsign} returns full DXCC data with full detail", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup/DL1ABC?detail=full`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta).to.have.property("detail", "full");
+				expect(response.body.data).to.have.property("callsign", "DL1ABC");
+				expect(response.body.data).to.have.property("dxcc");
+				// Full detail exposes the per-band/mode worked flags.
+				expect(response.body.data).to.have.property("call_worked");
+			});
+		});
+
+		it("GET /api/v2/lookup/{callsign} default detail omits the QSO history", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup/DL1ABC`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta).to.have.property("detail", "basic");
+				expect(response.body.data).to.have.property("workedBefore");
+				expect(response.body.data).to.not.have.property("call_worked");
+			});
+		});
+
+		it("GET /api/v2/lookup/{callsign}?detail=bogus returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup/DL1ABC?detail=bogus`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("GET /api/v2/lookup?callsign= works and handles a slashed callsign", () => {
+			// A "/" callsign can't be a path segment (encoded slashes are rejected),
+			// so the query form is the way to look these up.
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?callsign=${encodeURIComponent("DL1ABC/P")}`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.have.property("callsign", "DL1ABC/P");
+				expect(response.body.data).to.have.property("dxcc");
+			});
+		});
+
+		it("GET /api/v2/lookup?grid= reports a grid worked/confirmed result", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?grid=JN47`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta).to.have.property("type", "grid");
+				expect(response.body.data).to.have.property("gridsquare", "JN47");
+				expect(["Not Found", "Found", "Worked", "Confirmed"]).to.include(
+					response.body.data.result
+				);
+			});
+		});
+
+		it("GET /api/v2/lookup?grid=&logbook_id= of a foreign logbook returns 403", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?grid=JN47&logbook_id=999999`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(403);
+				expect(response.body.error).to.have.property("code", "forbidden");
+			});
+		});
+
+		it("GET /api/v2/lookup without a callsign or grid returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("is refused for a token without lookup:read (403)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup/DL1ABC`,
+				headers: auth(roKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(403);
+				expect(response.body.error).to.have.property("code", "insufficient_scope");
+			});
+		});
+	});
+
+	// --- Club resource (club:read, read-only) ------------------------------
+
+	describe("Club", () => {
+		it("GET /api/v2/club is refused for a non-officer/personal token (403)", () => {
+			// The test user's token is personal (owner == creator), so it is never a
+			// club officer and the endpoint refuses it.
+			cy.request({
+				method: "GET",
+				url: `${API}/club`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(403);
+				expect(response.body.error).to.have.property("code", "forbidden");
+			});
+		});
+	});
+
+	// --- Token resource (whoami, no scope) ---------------------------------
+
+	describe("Token", () => {
+		it("GET /api/v2/token returns the current token's metadata", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/token`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.have.property("id");
+				expect(response.body.data).to.have.property("owner");
+				expect(response.body.data.scopes).to.be.an("array").and.to.include("qso:read");
+				expect(response.body.data).to.have.property("expires_at");
+			});
+		});
+
+		it("GET /api/v2/token needs no particular scope (read-only token works)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/token`,
+				headers: auth(roKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.scopes).to.be.an("array");
+			});
+		});
+
+		it("GET /api/v2/token without a token returns 401", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/token`,
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(401);
+				expect(response.body.error).to.have.property("code", "unauthorized");
 			});
 		});
 	});
