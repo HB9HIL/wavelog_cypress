@@ -91,6 +91,23 @@ describe("Clubstations & Impersonate", () => {
 		cy.get('a.nav-link.dropdown-toggle i.fas.fa-users').should("not.exist");
 	}
 
+	// Enter the clubstation through the officer path: the header dropdown offers
+	// the club, the AJAX-loaded #clubswitchModal confirms it (clubswitch=1).
+	// Requires a club_permissions row plus the fresh login from beforeEach(),
+	// which is what fills the session key available_clubstations.
+	function clubSwitch(adminCallsign, clubCallsign) {
+		cy.visit("/index.php/dashboard");
+
+		openUserMenu(adminCallsign);
+		cy.get('button.dropdown-item[onclick*="clubswitch_modal"]')
+			.contains(clubCallsign)
+			.click();
+
+		cy.get("#clubswitchModal", { timeout: 8000 }).should("be.visible");
+		cy.get('#clubswitchModal input[name="clubswitch"]').should("have.value", "1");
+		cy.get('#clubswitchModal button[type="submit"]').click();
+	}
+
 	before(() => {
 		cy.setCookie('language', 'english');
 	});
@@ -213,19 +230,59 @@ describe("Clubstations & Impersonate", () => {
 
 		// The fresh login from beforeEach() repopulates available_clubstations now
 		// that the officer permission exists, so the switch entry appears.
-		cy.visit("/index.php/dashboard");
-
-		openUserMenu(env_user.callsign);
-		cy.get('button.dropdown-item[onclick*="clubswitch_modal"]')
-			.contains(env_club.callsign)
-			.click();
-
-		// The confirmation modal is loaded via AJAX into #clubswitchModal-container.
-		cy.get("#clubswitchModal", { timeout: 8000 }).should("be.visible");
-		cy.get('#clubswitchModal input[name="clubswitch"]').should("have.value", "1");
-		cy.get('#clubswitchModal button[type="submit"]').click();
+		clubSwitch(env_user.callsign, env_club.callsign);
 
 		assertInClubstationSession(env_club.callsign, env_user.callsign);
 		stopImpersonate(env_club.callsign);
+	});
+
+	// The list_clubmembers API endpoint is the only v1 endpoint gated on club
+	// permissions, which is why it lives here and not in 14-api_v1.cy.js.
+	// It authorizes on the *pair* behind the key: the key must belong to the
+	// clubstation (key_userid) but have been created by someone else
+	// (key_created_by) who holds permission level 9 on that club. A key minted
+	// while club-switched satisfies exactly that, so the key has to be created
+	// from inside the clubstation session — an ordinary admin key is rejected.
+	it("Should list club members through the API for an officer key", () => {
+		const env_user = Cypress.expose('user');
+		const env_club = Cypress.expose('clubstation');
+
+		let clubKey;
+
+		clubSwitch(env_user.callsign, env_club.callsign);
+		dismissVersionModal();
+
+		cy.createApiKey("rw").then((key) => { clubKey = key; });
+
+		// Leave the clubstation before calling the API, to prove the endpoint
+		// authorizes on the key alone and not on the current session.
+		cy.visit("/index.php/dashboard");
+		stopImpersonate(env_club.callsign);
+
+		cy.then(() => {
+			cy.apiPost("list_clubmembers", { key: clubKey }).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body).to.have.property("status", "successful");
+				const members = response.body.members;
+				expect(members).to.be.an("array").and.to.have.length.greaterThan(0);
+				// The admin was granted level 9 by the previous test.
+				const officer = members.find((m) => m.callsign === env_user.callsign);
+				expect(officer, "admin listed as club member").to.exist;
+				expect(String(officer.p_level)).to.eq("9");
+			});
+		});
+	});
+
+	it("Should reject list_clubmembers for a non-club key", () => {
+		// A key the admin minted for their own account has key_userid ==
+		// key_created_by, so it is not a club key and must be turned away.
+		cy.createApiKey("rw").then((adminKey) => {
+			cy.apiPost("list_clubmembers", { key: adminKey }, {
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(401);
+				expect(response.body).to.have.property("status", "error");
+			});
+		});
 	});
 });
