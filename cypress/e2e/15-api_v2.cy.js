@@ -1195,6 +1195,65 @@ describe("API v2", () => {
 			});
 		});
 
+		it("GET /api/v2/lookup?grid=all lists every worked gridsquare", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?grid=all`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta).to.have.property("type", "worked_grids");
+				expect(response.body.data.grids).to.be.an("array");
+				expect(response.body.data.count).to.eq(response.body.data.grids.length);
+				// Grids are normalised to 4 uppercase characters.
+				response.body.data.grids.forEach((grid) => {
+					expect(grid).to.match(/^[A-Z]{2}[0-9]{2}$/);
+				});
+			});
+		});
+
+		it("GET /api/v2/lookup?grid=all&band= narrows the result", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?grid=all`,
+				headers: auth(fullKey),
+			}).then((all) => {
+				cy.request({
+					method: "GET",
+					url: `${API}/lookup?grid=all&band=20m`,
+					headers: auth(fullKey),
+				}).then((response) => {
+					expect(response.status).to.eq(200);
+					expect(response.body.meta).to.have.property("band", "20m");
+					expect(response.body.data.count).to.be.at.most(all.body.data.count);
+				});
+			});
+		});
+
+		it("GET /api/v2/lookup?grid=all&cnfm=bogus returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?grid=all&cnfm=bogus`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("GET /api/v2/lookup?grid=all&logbook_id= of a foreign logbook returns 403", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?grid=all&logbook_id=999999`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(403);
+				expect(response.body.error).to.have.property("code", "forbidden");
+			});
+		});
+
 		it("GET /api/v2/lookup?grid=&logbook_id= of a foreign logbook returns 403", () => {
 			cy.request({
 				method: "GET",
