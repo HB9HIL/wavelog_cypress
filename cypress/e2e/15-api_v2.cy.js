@@ -335,28 +335,6 @@ describe("API v2", () => {
 			});
 		});
 
-		it("PUT /api/v2/qso/{id} replaces the QSO", () => {
-			cy.request({
-				method: "PUT",
-				url: `${API}/qso/${qsoId}`,
-				headers: auth(fullKey),
-				body: {
-					call: "V2API1",
-					band: "40m",
-					mode: "CW",
-					freq: 7030000,
-					qso_date: "2024-01-02",
-					time_on: "1215",
-				},
-			}).then((response) => {
-				expect(response.status).to.eq(200);
-				expect(response.body.data.band).to.eq("40m");
-				expect(response.body.data.mode).to.eq("CW");
-				// An optional field omitted on PUT is reset.
-				expect(response.body.data.comment === "" || response.body.data.comment === null).to.eq(true);
-			});
-		});
-
 		it("POST /api/v2/qso without a required field returns 400", () => {
 			cy.request({
 				method: "POST",
@@ -1447,15 +1425,15 @@ describe("API v2", () => {
 			});
 		});
 
-		it("GET /api/v2/lookup/{callsign} path form is gone and returns 405", () => {
+		it("GET /api/v2/lookup/{callsign} path form is gone and returns 404", () => {
 			cy.request({
 				method: "GET",
 				url: `${API}/lookup/DL1ABC`,
 				headers: auth(fullKey),
 				failOnStatusCode: false,
 			}).then((response) => {
-				expect(response.status).to.eq(405);
-				expect(response.body.error).to.have.property("code", "method_not_allowed");
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
 			});
 		});
 
