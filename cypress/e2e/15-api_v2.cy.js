@@ -1126,10 +1126,10 @@ describe("API v2", () => {
 	// --- Lookup resource (lookup:read, read-only) --------------------------
 
 	describe("Lookup", () => {
-		it("GET /api/v2/lookup/{callsign} returns full DXCC data with full detail", () => {
+		it("GET /api/v2/lookup?callsign= returns full DXCC data with full detail", () => {
 			cy.request({
 				method: "GET",
-				url: `${API}/lookup/DL1ABC?detail=full`,
+				url: `${API}/lookup?callsign=DL1ABC&detail=full`,
 				headers: auth(fullKey),
 			}).then((response) => {
 				expect(response.status).to.eq(200);
@@ -1141,10 +1141,10 @@ describe("API v2", () => {
 			});
 		});
 
-		it("GET /api/v2/lookup/{callsign} default detail omits the QSO history", () => {
+		it("GET /api/v2/lookup?callsign= default detail omits the QSO history", () => {
 			cy.request({
 				method: "GET",
-				url: `${API}/lookup/DL1ABC`,
+				url: `${API}/lookup?callsign=DL1ABC`,
 				headers: auth(fullKey),
 			}).then((response) => {
 				expect(response.status).to.eq(200);
@@ -1154,10 +1154,10 @@ describe("API v2", () => {
 			});
 		});
 
-		it("GET /api/v2/lookup/{callsign}?detail=bogus returns 400", () => {
+		it("GET /api/v2/lookup?callsign=&detail=bogus returns 400", () => {
 			cy.request({
 				method: "GET",
-				url: `${API}/lookup/DL1ABC?detail=bogus`,
+				url: `${API}/lookup?callsign=DL1ABC&detail=bogus`,
 				headers: auth(fullKey),
 				failOnStatusCode: false,
 			}).then((response) => {
@@ -1166,9 +1166,9 @@ describe("API v2", () => {
 			});
 		});
 
-		it("GET /api/v2/lookup?callsign= works and handles a slashed callsign", () => {
-			// A "/" callsign can't be a path segment (encoded slashes are rejected),
-			// so the query form is the way to look these up.
+		it("GET /api/v2/lookup?callsign= handles a slashed callsign", () => {
+			// Portable and DXCC-prefix calls carry a "/" — the query form passes
+			// them through unharmed.
 			cy.request({
 				method: "GET",
 				url: `${API}/lookup?callsign=${encodeURIComponent("DL1ABC/P")}`,
@@ -1219,10 +1219,22 @@ describe("API v2", () => {
 			});
 		});
 
-		it("is refused for a token without lookup:read (403)", () => {
+		it("GET /api/v2/lookup/{callsign} path form is gone and returns 405", () => {
 			cy.request({
 				method: "GET",
 				url: `${API}/lookup/DL1ABC`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(405);
+				expect(response.body.error).to.have.property("code", "method_not_allowed");
+			});
+		});
+
+		it("is refused for a token without lookup:read (403)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?callsign=DL1ABC`,
 				headers: auth(roKey),
 				failOnStatusCode: false,
 			}).then((response) => {
