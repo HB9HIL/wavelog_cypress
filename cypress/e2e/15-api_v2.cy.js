@@ -124,6 +124,27 @@ describe("API v2", () => {
 			});
 		});
 
+		it("CORS headers are present on real responses, not just the preflight", () => {
+			// A preflight that passes is useless if the actual response lacks the
+			// header: the browser would clear the request and then block the answer.
+			cy.request(`${API}/status`).then((response) => {
+				expect(response.headers["access-control-allow-origin"]).to.eq("*");
+			});
+		});
+
+		it("CORS headers are present on error responses too", () => {
+			// Without this a JS client cannot read why a call failed.
+			cy.request({
+				method: "GET",
+				url: `${API}/token`,
+				headers: { Authorization: "Bearer wl2_definitely_not_a_valid_token" },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(401);
+				expect(response.headers["access-control-allow-origin"]).to.eq("*");
+			});
+		});
+
 		it("OPTIONS preflight returns 204 with CORS headers", () => {
 			cy.request({
 				method: "OPTIONS",
@@ -435,6 +456,34 @@ describe("API v2", () => {
 				expect(response.body.error).to.have.property("code", "not_found");
 			});
 		});
+
+		it("PUT /api/v2/qso/{id} is not supported (405)", () => {
+			cy.request({
+				method: "PUT",
+				url: `${API}/qso/1`,
+				headers: auth(fullKey),
+				body: { call: "V2/4W7EST", band: "20m" },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(405);
+				expect(response.body.error).to.have.property("code", "method_not_allowed");
+			});
+		});
+
+		it("POST /api/v2/qso/{id} is rejected instead of creating a duplicate", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso/1`,
+				headers: auth(fullKey),
+				body: { station_profile_id: STATION_PROFILE_ID, call: "V2/4W7EST" },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(405);
+				expect(response.headers).to.have.property("allow");
+				expect(response.headers.allow).to.contain("PATCH");
+				expect(response.headers.allow).to.not.contain("POST");
+			});
+		});
 	});
 
 	// --- Stations resource (station:read / station:write / station:delete) -
@@ -546,18 +595,33 @@ describe("API v2", () => {
 			});
 		});
 
-		it("PUT /api/v2/station/{id} replaces the station", () => {
+		it("PATCH /api/v2/station/{id} leaves omitted fields alone", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/station/${stationId}`,
+				headers: auth(fullKey),
+				body: { name: "Cypress V2 Renamed", gridsquare: "JN48RI" },
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.name).to.eq("Cypress V2 Renamed");
+				expect(response.body.data.gridsquare).to.eq("JN48RI");
+				// power was set by the previous PATCH and must survive: there is
+				// no PUT, so nothing ever resets an omitted field.
+				expect(response.body.data.power).to.eq(50);
+				expect(response.body.data.city).to.eq("Bonn");
+			});
+		});
+
+		it("PUT /api/v2/station/{id} is not supported (405)", () => {
 			cy.request({
 				method: "PUT",
 				url: `${API}/station/${stationId}`,
 				headers: auth(fullKey),
-				body: { name: "Cypress V2 Replaced", callsign: "V2/4W7EST", gridsquare: "JN48RI" },
+				body: { name: "Cypress V2 Replaced", callsign: "V2/4W7EST" },
+				failOnStatusCode: false,
 			}).then((response) => {
-				expect(response.status).to.eq(200);
-				expect(response.body.data.name).to.eq("Cypress V2 Replaced");
-				expect(response.body.data.gridsquare).to.eq("JN48RI");
-				// power was set on PATCH; PUT omits it, so it is reset.
-				expect(response.body.data.power === null || response.body.data.power === 0).to.eq(true);
+				expect(response.status).to.eq(405);
+				expect(response.body.error).to.have.property("code", "method_not_allowed");
 			});
 		});
 
@@ -1273,6 +1337,45 @@ describe("API v2", () => {
 	// --- Lookup resource (lookup:read, read-only) --------------------------
 
 	describe("Lookup", () => {
+		it("GET /api/v2/lookup with a foreign station_ids is refused (403)", () => {
+			// Must not silently fall back to the token owner's own stations: that
+			// would answer with data the caller never asked for.
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?callsign=V2/4W7EST&station_ids=999999`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(403);
+				expect(response.body.error).to.have.property("code", "forbidden");
+			});
+		});
+
+		it("GET /api/v2/lookup with a non-numeric station_ids is rejected (400)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?callsign=V2/4W7EST&station_ids=abc`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("GET /api/v2/lookup/{id} returns 404, not 405", () => {
+			// Lookup has no addressable items, so the URL does not exist at all.
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup/1`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+
 		it("GET /api/v2/lookup?callsign= returns full DXCC data with full detail", () => {
 			cy.request({
 				method: "GET",
