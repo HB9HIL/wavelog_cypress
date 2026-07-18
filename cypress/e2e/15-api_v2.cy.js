@@ -62,6 +62,15 @@ describe("API v2", () => {
 	// Authorization header helper.
 	const auth = (token) => ({ Authorization: "Bearer " + token });
 
+	// Every API v2 JSON response includes common request metadata.
+	function expectCommonMeta(response, resource, method = "GET") {
+		expect(response.body).to.have.property("meta");
+		expect(response.body.meta).to.have.property("resource", resource);
+		expect(response.body.meta).to.have.property("method", method);
+		expect(response.body.meta).to.have.property("timestamp");
+		expect(Date.parse(response.body.meta.timestamp), "ISO timestamp").to.not.satisfy(Number.isNaN);
+	}
+
 	before(() => {
 		cy.setCookie("language", "english");
 		cy.login();
@@ -91,6 +100,7 @@ describe("API v2", () => {
 					name: "Wavelog API",
 					status: "ok",
 				});
+				expectCommonMeta(response, "status", "GET");
 			});
 		});
 
@@ -98,6 +108,7 @@ describe("API v2", () => {
 			cy.request(`${API}/status`).then((response) => {
 				expect(response.status).to.eq(200);
 				expect(response.body.data).to.have.property("status", "ok");
+				expectCommonMeta(response, "status", "GET");
 			});
 		});
 
@@ -637,6 +648,7 @@ describe("API v2", () => {
 				headers: auth(fullKey),
 				body: { radio: RADIO_NAME, frequency: 7030000, mode: "CW", power: 50 },
 			}).then((response) => {
+				expectCommonMeta(response, "radio", "POST");
 				expect(response.status).to.eq(200);
 				expect(response.body.data.id).to.eq(radioId);
 				expect(response.body.data.frequency).to.eq(7030000);
@@ -728,6 +740,7 @@ describe("API v2", () => {
 				headers: auth(fullKey),
 			}).then((response) => {
 				expect(response.status).to.eq(200);
+				expectCommonMeta(response, "statistic", "GET");
 				expect(response.body.meta).to.have.property("profile", "qso");
 				const qso = response.body.data.qso;
 				expect(qso).to.have.property("total");
