@@ -734,7 +734,6 @@ describe("API v2", () => {
 				expect(Number(qso.total)).to.be.a("number");
 				expect(qso.activity).to.have.all.keys("today", "month", "year");
 				expect(qso.breakdown).to.have.all.keys("by_band", "by_mode");
-				expect(qso.confirmations).to.have.all.keys("lotw", "eqsl", "qsl");
 				expect(qso.dxcc).to.have.all.keys("worked", "confirmed", "available");
 			});
 		});
@@ -748,6 +747,150 @@ describe("API v2", () => {
 				expect(response.status).to.eq(200);
 				expect(response.body.meta).to.have.property("profile", "full");
 				expect(response.body.data).to.have.property("qso");
+				expect(response.body.data).to.have.property("confirmations");
+			});
+		});
+
+		// The confirmations topic counts QSL confirmations per type, with a band
+		// and a mode breakdown next to the grand totals. Numbers depend on the
+		// ADIF import in 06-adif, so the assertions stay structural/relational
+		// rather than pinning exact values.
+		const CONFIRMATION_TYPES = ["lotw", "eqsl", "qsl", "qrz", "clublog"];
+		let confirmationTotals; // counts from the unfiltered call, reused below
+
+		it("GET /api/v2/statistic?profile=confirmations returns totals plus band and mode breakdowns", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/statistic?profile=confirmations`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta).to.have.property("profile", "confirmations");
+
+				const c = response.body.data.confirmations;
+				expect(c).to.have.all.keys("counts", "by_band", "by_mode", "filters");
+				expect(c.counts).to.have.all.keys("qsos", ...CONFIRMATION_TYPES, "confirmed");
+				CONFIRMATION_TYPES.forEach((type) => {
+					expect(c.counts[type], type).to.be.a("number");
+				});
+
+				expect(c.by_band).to.be.an("array");
+				expect(c.by_mode).to.be.an("array");
+				c.by_band.forEach((row) => {
+					expect(row).to.have.all.keys("band", "qsos", ...CONFIRMATION_TYPES, "confirmed");
+					// confirmed counts QSOs with at least one confirmation, so it
+					// can never exceed the QSOs it was drawn from.
+					expect(row.confirmed, row.band).to.be.at.most(row.qsos);
+				});
+				c.by_mode.forEach((row) => {
+					expect(row).to.have.all.keys("mode", "qsos", ...CONFIRMATION_TYPES, "confirmed");
+					expect(row.confirmed, row.mode).to.be.at.most(row.qsos);
+				});
+
+				expect(c.filters.type).to.deep.eq(CONFIRMATION_TYPES);
+				expect(c.filters.since).to.eq(null);
+
+				confirmationTotals = c.counts;
+			});
+		});
+
+		it("GET /api/v2/statistic?profile=confirmations breakdowns add up to the totals", () => {
+			// The breakdowns come from separate GROUP BY queries, so summing them
+			// back to the grand totals proves both paths agree on the same data.
+			cy.request({
+				method: "GET",
+				url: `${API}/statistic?profile=confirmations`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				const c = response.body.data.confirmations;
+				["by_band", "by_mode"].forEach((group) => {
+					["qsos", ...CONFIRMATION_TYPES, "confirmed"].forEach((type) => {
+						const sum = c[group].reduce((acc, row) => acc + row[type], 0);
+						expect(sum, `${group}.${type}`).to.eq(c.counts[type]);
+					});
+				});
+			});
+		});
+
+		it("GET /api/v2/statistic?profile=confirmations&type=lotw,eqsl narrows to the requested types", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/statistic?profile=confirmations&type=lotw,eqsl`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				const c = response.body.data.confirmations;
+				expect(c.counts).to.have.all.keys("qsos", "lotw", "eqsl", "confirmed");
+				expect(c.filters.type).to.deep.eq(["lotw", "eqsl"]);
+				c.by_band.forEach((row) => {
+					expect(row).to.have.all.keys("band", "qsos", "lotw", "eqsl", "confirmed");
+				});
+			});
+		});
+
+		it("GET /api/v2/statistic?profile=confirmations&since=<today> can only lower the counts", () => {
+			const today = new Date().toISOString().slice(0, 10);
+			cy.request({
+				method: "GET",
+				url: `${API}/statistic?profile=confirmations&since=${today}`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				const counts = response.body.data.confirmations.counts;
+				expect(response.body.data.confirmations.filters.since).to.eq(today);
+				CONFIRMATION_TYPES.forEach((type) => {
+					expect(counts[type], type).to.be.at.most(confirmationTotals[type]);
+				});
+			});
+		});
+
+		it("GET /api/v2/statistic?profile=confirmations&band=&mode= filters without erroring", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/statistic?profile=confirmations&band=20m&mode=FT8`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				const c = response.body.data.confirmations;
+				expect(c.filters.band).to.eq("20m");
+				expect(c.filters.mode).to.eq("FT8");
+				CONFIRMATION_TYPES.forEach((type) => {
+					expect(c.counts[type], type).to.be.at.most(confirmationTotals[type]);
+				});
+				// Narrowing to one band/mode leaves at most that single group.
+				expect(c.by_band.length).to.be.at.most(1);
+				expect(c.by_mode.length).to.be.at.most(1);
+			});
+		});
+
+		it("GET /api/v2/statistic?profile=confirmations&type=hrdlog returns 400", () => {
+			// HRDLog is upload-only in Wavelog, so it is not a confirmation type.
+			cy.request({
+				method: "GET",
+				url: `${API}/statistic?profile=confirmations&type=hrdlog`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+				expect(response.body.error.details.allowed).to.include("lotw");
+			});
+		});
+
+		it("GET /api/v2/statistic?profile=confirmations with a malformed date returns 400", () => {
+			// 2026-02-31 is well-formed but not a real date; it must not roll over
+			// into March.
+			["since=notadate", "since=2026-02-31", "qso_since=notadate"].forEach((query) => {
+				cy.request({
+					method: "GET",
+					url: `${API}/statistic?profile=confirmations&${query}`,
+					headers: auth(fullKey),
+					failOnStatusCode: false,
+				}).then((response) => {
+					expect(response.status, query).to.eq(400);
+					expect(response.body.error).to.have.property("code", "validation_error");
+					expect(response.body.error.details).to.have.property("format", "YYYY-MM-DD");
+				});
 			});
 		});
 
@@ -993,6 +1136,19 @@ describe("API v2", () => {
 			}).then((response) => {
 				expect(response.status).to.eq(400);
 				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("GET /api/v2/qso?qsl_filter=qrz is accepted", () => {
+			// QRZ.com is a confirmation source like LoTW/eQSL/paper/Clublog and
+			// must be filterable too.
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?qsl_filter=qrz&limit=1`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.be.an("array");
 			});
 		});
 
