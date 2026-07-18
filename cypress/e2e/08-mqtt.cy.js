@@ -28,17 +28,7 @@ describe("MQTT Events", () => {
 		});
 
 		// Generate a read & write API key once and remember it for the API tests.
-		cy.visit("/index.php/api");
-		cy.get('button')
-			.contains("Create a read & write key")
-			.click();
-		cy.get('.api-key')
-			.first()
-			.invoke('text')
-			.then((text) => {
-				apiKey = text.trim();
-				expect(apiKey, "generated API key").to.have.length.greaterThan(0);
-			});
+		cy.createApiKey("rw").then((key) => { apiKey = key; });
 	});
 
 	beforeEach(() => {
