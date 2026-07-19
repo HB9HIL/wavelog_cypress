@@ -665,7 +665,7 @@ describe("API v2", () => {
 				method: "POST",
 				url: `${API}/station`,
 				headers: auth(fullKey),
-				body: { gridsquare: "JN47RI" }, // missing name + callsign
+				body: { gridsquare: "JN47RI" }, // missing name, callsign, dxcc, cq, itu
 				failOnStatusCode: false,
 			}).then((response) => {
 				expect(response.status).to.eq(400);
@@ -678,7 +678,13 @@ describe("API v2", () => {
 				method: "POST",
 				url: `${API}/station`,
 				headers: auth(fullKey),
-				body: { name: "Bad Grid", callsign: "V2/BAD", gridsquare: "ZZ99zz" },
+				// Every required field is supplied, so the grid is the only thing
+				// left to reject - otherwise this would pass on the missing-field
+				// check instead and stop testing the locator at all.
+				body: {
+					name: "Bad Grid", callsign: "V2/BAD", gridsquare: "ZZ99zz",
+					dxcc: 287, cq: 14, itu: 28,
+				},
 				failOnStatusCode: false,
 			}).then((response) => {
 				expect(response.status).to.eq(400);
@@ -713,6 +719,23 @@ describe("API v2", () => {
 				// no PUT, so nothing ever resets an omitted field.
 				expect(response.body.data.power).to.eq(50);
 				expect(response.body.data.city).to.eq("Bonn");
+			});
+		});
+
+		// DXCC, CQ and ITU end up in integer columns on every QSO logged from the
+		// location. Blanking one out would leave a location that looks fine but
+		// makes QSO creation fail, so PATCH refuses to clear it.
+		it("PATCH /api/v2/station/{id} cannot clear a required field (400)", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/station/${stationId}`,
+				headers: auth(fullKey),
+				body: { cq: null },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+				expect(response.body.error.details.fields).to.include("cq");
 			});
 		});
 
