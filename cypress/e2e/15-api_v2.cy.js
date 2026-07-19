@@ -35,29 +35,8 @@ describe("API v2", () => {
 	let stationId;
 	let radioId;
 
-	// Mint a token through the web UI and return its plaintext value. The POST to
-	// api_token/generate stores the token and flashes the plaintext; the followed
-	// redirect renders /api with the one-time reveal modal we scrape here.
-	function mintToken(name, scopes, expiry = "30") {
-		const body = new URLSearchParams();
-		body.append("token_name", name);
-		body.append("expiry", expiry);
-		scopes.forEach((s) => body.append("scopes[]", s));
-
-		return cy
-			.request({
-				method: "POST",
-				url: "/index.php/api_token/generate",
-				headers: { "content-type": "application/x-www-form-urlencoded" },
-				body: body.toString(),
-			})
-			.then((response) => {
-				expect(response.status, "generate token page").to.eq(200);
-				const match = response.body.match(/id="newTokenValue"[^>]*value="(wl2_[0-9a-f]+)"/);
-				expect(match, `plaintext token for "${name}"`).to.not.be.null;
-				return match[1];
-			});
-	}
+	// Token minting lives in cy.createApiToken() (support/commands.js) so the
+	// clubstation spec can reuse it.
 
 	// Authorization header helper.
 	const auth = (token) => ({ Authorization: "Bearer " + token });
@@ -78,8 +57,8 @@ describe("API v2", () => {
 			cy.writeFile("cypress/fixtures/cookies.json", cookies);
 		});
 
-		mintToken("cypress-v2-full", ALL_SCOPES).then((t) => (fullKey = t));
-		mintToken("cypress-v2-readonly", READ_SCOPES).then((t) => (roKey = t));
+		cy.createApiToken("cypress-v2-full", ALL_SCOPES).then((t) => (fullKey = t));
+		cy.createApiToken("cypress-v2-readonly", READ_SCOPES).then((t) => (roKey = t));
 	});
 
 	beforeEach(() => {
@@ -237,6 +216,131 @@ describe("API v2", () => {
 			}).then((response) => {
 				expect(response.status).to.eq(404);
 				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+	});
+
+	// --- Dispatcher: URL shape and verb handling --------------------------
+	//
+	// These assert the routing layer itself rather than any one resource: which
+	// URLs exist at all, and which verbs a resource advertises.
+
+	describe("Dispatcher", () => {
+		// The Allow header is derived from the verb methods a resource actually
+		// implements, so it can never advertise a verb that only ends in the base
+		// class' 405 stub. Asserting the exact set is the point here: a hardcoded
+		// list would drift from the resources without any test noticing.
+		const ALLOW_BY_RESOURCE = {
+			qso: ["GET", "POST", "PATCH", "DELETE"],
+			station: ["GET", "POST", "PATCH", "DELETE"],
+			radio: ["GET", "POST", "DELETE"],
+			lookup: ["GET"],
+			statistic: ["GET"],
+			club: ["GET"],
+			token: ["GET"],
+		};
+
+		Object.entries(ALLOW_BY_RESOURCE).forEach(([resource, verbs]) => {
+			it(`Allow on /${resource} lists exactly the implemented verbs`, () => {
+				// PUT is implemented by no resource, so it always 405s and the
+				// response carries the full Allow set for that resource.
+				cy.request({
+					method: "PUT",
+					url: `${API}/${resource}/1`,
+					headers: auth(fullKey),
+					failOnStatusCode: false,
+				}).then((response) => {
+					expect(response.status).to.eq(405);
+					expect(response.body.error).to.have.property("code", "method_not_allowed");
+					expect(response.headers).to.have.property("allow");
+					const allowed = response.headers.allow
+						.split(",")
+						.map((v) => v.trim())
+						.sort();
+					expect(allowed).to.deep.eq([...verbs].sort());
+				});
+			});
+		});
+
+		// A verb a resource does not implement is a 405, not a permission problem.
+		// Were the scope checked first, a POST to a read-only resource would answer
+		// "insufficient_scope: lookup:write" — a scope that is not in the registry
+		// and that no token can ever hold, hiding the real reason from the client.
+		["lookup", "statistic", "club", "token"].forEach((resource) => {
+			it(`POST /${resource} is 405, not 403 insufficient_scope`, () => {
+				cy.request({
+					method: "POST",
+					url: `${API}/${resource}`,
+					headers: auth(fullKey),
+					body: {},
+					failOnStatusCode: false,
+				}).then((response) => {
+					expect(response.status).to.eq(405);
+					expect(response.body.error).to.have.property("code", "method_not_allowed");
+					expect(response.headers.allow).to.eq("GET");
+				});
+			});
+		});
+
+		// The URL space is exactly /<resource>[/<id>]. Anything deeper is a URL
+		// that does not exist; silently ignoring the surplus segments would answer
+		// a request the client never made.
+		[
+			"/qso/1/foo",
+			"/qso/1/foo/bar",
+			"/station/1/x",
+			"/status/foo",
+		].forEach((path) => {
+			it(`GET ${path} returns 404`, () => {
+				cy.request({
+					method: "GET",
+					url: `${API}${path}`,
+					headers: auth(fullKey),
+					failOnStatusCode: false,
+				}).then((response) => {
+					expect(response.status).to.eq(404);
+					expect(response.body.error).to.have.property("code", "not_found");
+				});
+			});
+		});
+
+		it("DELETE on a too-deep path is refused as well", () => {
+			cy.request({
+				method: "DELETE",
+				url: `${API}/qso/1/foo`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+
+		// The path shape is a client error regardless of credentials, so it is
+		// rejected before authentication runs.
+		it("a too-deep path is refused without a token as well (404, not 401)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso/1/foo`,
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+
+		// A trailing slash produces an empty segment, which is dropped rather than
+		// counted against the two-segment limit. Station 1 is the installer's
+		// default location and always exists.
+		["/qso/", `/station/${STATION_PROFILE_ID}/`].forEach((path) => {
+			it(`GET ${path} still resolves`, () => {
+				cy.request({
+					method: "GET",
+					url: `${API}${path}`,
+					headers: auth(fullKey),
+				}).then((response) => {
+					expect(response.status).to.eq(200);
+				});
 			});
 		});
 	});
@@ -976,9 +1080,11 @@ describe("API v2", () => {
 			});
 		});
 
-		it("POST /api/v2/statistic is refused: the resource is read-only (403)", () => {
-			// There is no statistics:write scope, so any write verb is rejected at
-			// the scope check before it reaches a handler.
+		it("POST /api/v2/statistic is refused: the resource is read-only (405)", () => {
+			// The resource implements no write verb, which the dispatcher settles
+			// before it ever looks at scopes. A scope check here would report
+			// "insufficient_scope: statistic:write" — a scope that is not in the
+			// registry and that no token can hold, pointing at the wrong problem.
 			cy.request({
 				method: "POST",
 				url: `${API}/statistic`,
@@ -986,8 +1092,9 @@ describe("API v2", () => {
 				body: {},
 				failOnStatusCode: false,
 			}).then((response) => {
-				expect(response.status).to.eq(403);
-				expect(response.body.error).to.have.property("code", "insufficient_scope");
+				expect(response.status).to.eq(405);
+				expect(response.body.error).to.have.property("code", "method_not_allowed");
+				expect(response.headers.allow).to.eq("GET");
 			});
 		});
 	});
@@ -1440,6 +1547,37 @@ describe("API v2", () => {
 				expect(response.body.meta).to.have.property("type", "grid");
 				expect(response.body.data).to.have.property("gridsquare", "JN47");
 				expect(["Not Found", "Found", "Worked", "Confirmed"]).to.include(
+					response.body.data.result
+				);
+			});
+		});
+
+		// Both grid paths must validate cnfm. check_if_grid_worked_in_logbook()
+		// switches on the value and falls back to selecting the gridsquare itself
+		// for anything it does not know, so an unvalidated value would be compared
+		// against gridsquare substrings instead of a confirmation flag and report
+		// "Worked" rather than failing.
+		it("GET /api/v2/lookup?grid=&cnfm=bogus returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?grid=JN47&cnfm=bogus`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+				expect(response.body.error.details.allowed).to.deep.eq(["qsl", "lotw", "eqsl"]);
+			});
+		});
+
+		it("GET /api/v2/lookup?grid=&cnfm= accepts a valid type in any case", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?grid=JN47&cnfm=LOTW`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(["Not Found", "Worked", "Confirmed"]).to.include(
 					response.body.data.result
 				);
 			});
