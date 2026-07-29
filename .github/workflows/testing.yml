@@ -62,11 +62,19 @@ jobs:
           # special_callsign enables the Clubstation/Impersonate feature for the
           # clubstation e2e test (the installer generates a random encryption_key,
           # so impersonate is not blocked by the default flossie key).
+          # cty_url points the installer's DXCC update at Wavelog's own dxcc_data
+          # mirror instead of clublog.org: the test matrix is 4 PHP x 7 DB combos,
+          # each a full fresh install with one retry, so leaving it on the default
+          # would mean up to 56 cty.xml downloads from clublog per workflow run.
+          # Wavelog versions without cty_url support simply ignore the key and
+          # download from clublog as before, so dispatches against older branches
+          # or forks keep working.
           cat >> wavelog/install/config/config.php <<'EOF'
           $config['mqtt_server'] = 'mqtt-broker';
           $config['mqtt_port'] = 1883;
           $config['mqtt_prefix'] = 'wavelog/';
           $config['special_callsign'] = true;
+          $config['cty_url'] = 'https://github.com/wavelog/dxcc_data/raw/refs/heads/master/cty.xml.gz';
           EOF
           docker build -t wavelog-web:php${{ matrix.php }} wavelog
           docker save wavelog-web:php${{ matrix.php }} | gzip > image.tar.gz
@@ -219,67 +227,85 @@ jobs:
             ~/.cache/Cypress
           key: deps-${{ hashFiles('package-lock.json') }}
 
-      - name: Start database
-        run: |
-          docker network create wavelog_testnet
-          # MariaDB and MySQL images use different env var names for the same thing
-          if [ "${{ matrix.db.vendor }}" = "mysql" ]; then
-            DB_ENV="-e MYSQL_RANDOM_ROOT_PASSWORD=yes -e MYSQL_DATABASE=wavelog -e MYSQL_USER=wavelog -e MYSQL_PASSWORD=wavelog"
-          else
-            DB_ENV="-e MARIADB_RANDOM_ROOT_PASSWORD=yes -e MARIADB_DATABASE=wavelog -e MARIADB_USER=wavelog -e MARIADB_PASSWORD=wavelog"
-          fi
-          docker run -d \
-            --name wavelog-db \
-            --network wavelog_testnet \
-            --network-alias wavelog-db \
-            $DB_ENV \
-            ${{ matrix.db.image }}
-
       # Normally a no-op: the deps job primed the cache and the restore above hit.
-      # On a cache miss this falls back to npm ci, overlapping with the background
-      # DB init.
+      # On a cache miss this falls back to npm ci.
       - name: Install dependencies
         if: steps.cache.outputs.cache-hit != 'true'
         run: npm ci
 
-      - name: Wait for database
-        run: |
-          # MariaDB 11.x dropped the mysql* compat binaries; use mariadb-admin there
-          if [ "${{ matrix.db.vendor }}" = "mariadb" ]; then PING=mariadb-admin; else PING=mysqladmin; fi
-          echo "Waiting for ${{ matrix.db.image }} to become ready..."
-          for i in $(seq 1 60); do
-            if docker exec wavelog-db "$PING" ping -h localhost --silent 2>/dev/null; then
-              echo "Database is ready"; exit 0
-            fi
-            sleep 2
-          done
-          echo "Database did not become ready in time"; exit 1
-
-      - name: Start web container
-        run: |
-          docker run -d \
-            --name wavelog-web \
-            --network wavelog_testnet \
-            -p 8080:80 \
-            wavelog-web:php${{ matrix.php }}
-
-      # Broker for the MQTT e2e test: reachable by the web container via the
-      # network alias mqtt-broker and by the Cypress node process via localhost.
-      - name: Start MQTT broker
-        run: |
-          docker run -d \
-            --name wavelog-mqtt \
-            --network wavelog_testnet \
-            --network-alias mqtt-broker \
-            -p 1883:1883 \
-            -v "${{ github.workspace }}/docker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" \
-            eclipse-mosquitto:2
-
-      - name: Run Cypress
+      # Provision the containers and run Cypress, retrying once on failure.
+      #
+      # GitHub Actions has no native per-job auto-retry, and the flaky failure we
+      # hit is 00-installer.cy.js timing out under GitHub's daytime load (nights
+      # are fine). That spec is stateful and non-idempotent: a timed-out attempt
+      # leaves a dirty DB and a half-installed Wavelog the installer can't run
+      # against again, so simply re-running Cypress does not work. Instead each
+      # attempt tears everything down and brings up a completely fresh
+      # network/DB/broker/web before running the suite from a clean slate.
+      # Two attempts total (one retry).
+      - name: Provision and run Cypress (fresh state, retry once)
         env:
           CYPRESS_baseUrl: "http://localhost:8080/"
           MQTT_BROKER_URL: "mqtt://localhost:1883"
-        run: npx cypress run
+        run: |
+          # MariaDB and MySQL images use different env var names for the same
+          # thing; MariaDB 11.x also dropped the mysql* compat binaries, so it
+          # pings with mariadb-admin instead of mysqladmin.
+          if [ "${{ matrix.db.vendor }}" = "mysql" ]; then
+            DB_ENV="-e MYSQL_RANDOM_ROOT_PASSWORD=yes -e MYSQL_DATABASE=wavelog -e MYSQL_USER=wavelog -e MYSQL_PASSWORD=wavelog"
+            PING=mysqladmin
+          else
+            DB_ENV="-e MARIADB_RANDOM_ROOT_PASSWORD=yes -e MARIADB_DATABASE=wavelog -e MARIADB_USER=wavelog -e MARIADB_PASSWORD=wavelog"
+            PING=mariadb-admin
+          fi
+
+          max_attempts=2
+          for attempt in $(seq 1 "$max_attempts"); do
+            echo "::group::Provision + Cypress attempt $attempt/$max_attempts"
+
+            # Clean slate. No-op on the first attempt; on a retry this removes the
+            # previous attempt's dirty DB / half-installed web container so the
+            # stateful installer starts from scratch.
+            docker rm -f wavelog-db wavelog-web wavelog-mqtt >/dev/null 2>&1 || true
+            docker network rm wavelog_testnet >/dev/null 2>&1 || true
+
+            docker network create wavelog_testnet
+
+            docker run -d --name wavelog-db \
+              --network wavelog_testnet --network-alias wavelog-db \
+              $DB_ENV ${{ matrix.db.image }}
+
+            # Broker for the MQTT e2e test: reachable by the web container via the
+            # alias mqtt-broker and by the Cypress node process via localhost.
+            docker run -d --name wavelog-mqtt \
+              --network wavelog_testnet --network-alias mqtt-broker \
+              -p 1883:1883 \
+              -v "${{ github.workspace }}/docker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" \
+              eclipse-mosquitto:2
+
+            echo "Waiting for ${{ matrix.db.image }} to become ready..."
+            for i in $(seq 1 60); do
+              if docker exec wavelog-db "$PING" ping -h localhost --silent 2>/dev/null; then
+                echo "Database is ready"; break
+              fi
+              sleep 2
+            done
+
+            docker run -d --name wavelog-web \
+              --network wavelog_testnet -p 8080:80 \
+              wavelog-web:php${{ matrix.php }}
+
+            if npx cypress run; then
+              echo "::endgroup::"
+              echo "Cypress passed on attempt $attempt"
+              exit 0
+            fi
+            echo "::endgroup::"
+            echo "Cypress attempt $attempt failed."
+          done
+
+          echo "Cypress failed after $max_attempts attempts"
+          exit 1
 
       - name: Upload artifacts on failure
         if: failure()

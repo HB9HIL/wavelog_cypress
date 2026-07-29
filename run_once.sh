@@ -216,11 +216,16 @@ if [ "$ONLY" = "semgrep" ]; then run_semgrep; cleanup_temp; print_report; exit $
 # special_callsign turns on the Clubstation/Impersonate feature so the
 # clubstation e2e test finds its UI (the installer generates a random
 # encryption_key, so impersonate is not blocked by the default flossie key).
+# cty_url points the installer's DXCC update at Wavelog's own dxcc_data mirror
+# instead of clublog.org, matching CI (where the PHP x DB matrix would otherwise
+# pull cty.xml from clublog dozens of times per run). Wavelog versions without
+# cty_url support ignore the key and download from clublog as before.
 cat >> /tmp/wavelog-${CI_PIPELINE_ID}/install/config/config.php <<'EOF'
 $config['mqtt_server'] = 'mqtt-broker';
 $config['mqtt_port'] = 1883;
 $config['mqtt_prefix'] = 'wavelog/';
 $config['special_callsign'] = true;
+$config['cty_url'] = 'https://github.com/wavelog/dxcc_data/raw/refs/heads/master/cty.xml.gz';
 EOF
 
 # For a full run, bring up network/MQTT/DB early so the database initializes
