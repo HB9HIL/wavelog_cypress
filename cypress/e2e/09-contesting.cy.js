@@ -454,3 +454,139 @@ describe("Contesting legacy import", () => {
 			.should("contain.text", "No historical contests found");
 	});
 });
+
+// Serial numbers in the logging engine are handed out by the server, so two
+// operators in the same multi-op session can never be given the same number.
+// The claim rides on the regular heartbeat (request type "claim_serial"), fired
+// off immediately via triggerNow() when the operator leaves the callsign field.
+//
+// Heartbeats carrying a claim get their own alias so the tests can wait for one
+// deterministically — polling the recorded traffic is racy, the claim only shows
+// up once its heartbeat has come back.
+//
+// The red/green colouring of the sent serial is a clubstation-only cue and is
+// therefore not covered here: a Quickstart session belongs to a single
+// operator, where the field stays unstyled on purpose.
+describe("Contesting serial reservation", () => {
+	const CONTEST_CALL = "9A9SER";
+
+	const serialOf = (interception) => parseInt(interception.response.body.data.claimed_serial, 10);
+
+	// Fills the frequency/mode the radio component would supply, then logs.
+	const logCurrentQso = () => {
+		cy.window().then((win) => {
+			win.document.getElementById("frequency").value = "14074000";
+			const modeSel = win.document.getElementById("mode");
+			const opt = [...modeSel.options].find((o) => o.value);
+			if (opt) modeSel.value = opt.value;
+			win.logQso();
+		});
+		cy.get("#qso-tbody tr", { timeout: 10000 }).should("have.length.at.least", 1);
+	};
+
+	before(() => {
+		cy.setCookie('language', 'english');
+		cy.login();
+		cy.getCookies().then(cookies => {
+			cy.writeFile('cypress/fixtures/cookies.json', cookies);
+		});
+	});
+
+	beforeEach(() => {
+		cy.readFile('cypress/fixtures/cookies.json').then(cookies => {
+			cookies.forEach(cookie => {
+				cy.setCookie(cookie.name, cookie.value);
+			});
+		});
+
+		cy.intercept('POST', '**/contesting/heartbeat', (req) => {
+			if ((req.body?.requests || []).some((r) => r.type === 'claim_serial')) {
+				req.alias = 'claimHeartbeat';
+			}
+		}).as('heartbeat');
+
+		// Quickstart sessions use the default exchange settings, which include the
+		// serial field and a single series shared by all operators.
+		cy.visit("/index.php/contesting/quickstart");
+		cy.get("#contest-loading-screen", { timeout: 20000 }).should("not.exist");
+		cy.get("#qso-callsign", { timeout: 10000 }).should("be.visible");
+		cy.waitForScpReady();
+	});
+
+	it("Leaves the sent serial unstyled in a single-operator session", () => {
+		cy.get("#qso-serial-sent")
+			.should("be.visible")
+			.and("not.have.class", "serial-unclaimed")
+			.and("not.have.class", "serial-claimed");
+	});
+
+	it("Claims a serial through the heartbeat when leaving the callsign field", () => {
+		cy.get("#qso-callsign").type(CONTEST_CALL + " ");
+
+		cy.wait("@claimHeartbeat").then((interception) => {
+			expect(serialOf(interception), "claimed serial").to.be.greaterThan(0);
+			// The claimed number is what the form shows from now on.
+			cy.get("#qso-serial-sent").should("have.value", String(serialOf(interception)));
+		});
+	});
+
+	it("Claims exactly once per QSO, not once more for the focus change", () => {
+		// Space claims the number and then moves focus into the received serial
+		// field. If the focus handler claimed again, a number would be burned on
+		// every single QSO and the series would advance in steps of two.
+		cy.get("#qso-callsign").type(CONTEST_CALL + " ");
+		cy.wait("@claimHeartbeat");
+
+		// Move through the remaining received fields — no further claim may go out.
+		cy.get("#qso-serial-received").focus().type("001");
+		cy.get("#qso-callsign").focus();
+		cy.get("#qso-serial-received").focus();
+
+		// Let a couple of heartbeats pass to prove nothing else is queued.
+		cy.wait("@heartbeat");
+		cy.wait("@heartbeat");
+		cy.get("@claimHeartbeat.all").should("have.length", 1);
+	});
+
+	it("Gives an unused number back instead of leaving a gap", () => {
+		cy.get("#qso-callsign").type(CONTEST_CALL + " ");
+
+		cy.wait("@claimHeartbeat").then((first) => {
+			const firstSerial = serialOf(first);
+
+			// Abandon the callsign without logging. The number was the last one
+			// handed out, so it goes back to the series and is issued again.
+			cy.get("body").type("{esc}");
+			cy.get("#qso-callsign").type(CONTEST_CALL + " ");
+
+			cy.wait("@claimHeartbeat").then((second) => {
+				expect(serialOf(second), "reclaimed number").to.equal(firstSerial);
+			});
+		});
+	});
+
+	it("Moves on to the next number once a QSO is logged", () => {
+		cy.get("#qso-callsign").type(CONTEST_CALL + " ");
+
+		cy.wait("@claimHeartbeat").then((first) => {
+			const firstSerial = serialOf(first);
+			logCurrentQso();
+
+			// The logged number is spent, so it must not be handed out again.
+			cy.get("#qso-callsign").type(CONTEST_CALL + " ");
+			cy.wait("@claimHeartbeat").then((second) => {
+				expect(serialOf(second), "claim after logging").to.equal(firstSerial + 1);
+			});
+		});
+	});
+
+	it("Logs the QSO with the claimed number", () => {
+		cy.get("#qso-callsign").type(CONTEST_CALL + " ");
+
+		cy.wait("@claimHeartbeat").then((interception) => {
+			const claimed = String(serialOf(interception));
+			logCurrentQso();
+			cy.get("#qso-tbody").should("contain.text", claimed);
+		});
+	});
+});
