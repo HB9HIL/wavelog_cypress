@@ -1,30 +1,6 @@
 // installer is stateful, no retries allowed
 describe("Installer Test", { retries: 0 }, () => {
 
-	let logPollStartedAt = 0;
-	let lastLogBody = "";
-
-	const LOG_POLL_MAX_INFLIGHT = 10000;
-
-	function throttleDebugLogPolling() {
-		logPollStartedAt = 0;
-
-		cy.intercept("POST", "**/install/ajax.php", (req) => {
-			if (!String(req.body).includes("read_logfile")) {
-				return; // functional installer call -- leave untouched
-			}
-			if (logPollStartedAt && Date.now() - logPollStartedAt < LOG_POLL_MAX_INFLIGHT) {
-				req.reply({ statusCode: 200, body: lastLogBody });
-				return;
-			}
-			logPollStartedAt = Date.now();
-			req.continue((res) => {
-				lastLogBody = String(res.body ?? "");
-				logPollStartedAt = 0;
-			});
-		});
-	}
-
 	function waitForInstallStep(step, timeout) {
 		cy.get(`i[id="${step}_check"]`, { timeout })
 			.should("be.visible")
@@ -75,7 +51,6 @@ describe("Installer Test", { retries: 0 }, () => {
 	// Before each Test we have to call the installer again
 	beforeEach(() => {
 		cy.restoreLocalStorage();
-		throttleDebugLogPolling();
 		visitInstallerPage();
 	});
 
