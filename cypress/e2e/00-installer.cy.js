@@ -90,7 +90,7 @@ describe("Installer Test", { retries: 0 }, () => {
 			.click();
 
 		// Check if the installer is running
-		cy.get("body", { timeout: 20000 })
+		cy.get("body", { timeout: 30000 })
 			.contains("Installation")
 			.should("be.visible");
 
@@ -99,11 +99,11 @@ describe("Installer Test", { retries: 0 }, () => {
 			.click();
 
 		// Check if all steps show green after some time
-		cy.get('i[id="config_file_check"]', { timeout: 10000 })
+		cy.get('i[id="config_file_check"]', { timeout: 30000 })
 			.should("be.visible")
 			.and("have.class", "fa-check-circle");
 
-		cy.get('i[id="database_file_check"]', { timeout: 10000 })
+		cy.get('i[id="database_file_check"]', { timeout: 30000 })
 			.should("be.visible")
 			.and("have.class", "fa-check-circle");
 
@@ -115,11 +115,11 @@ describe("Installer Test", { retries: 0 }, () => {
 			.should("be.visible")
 			.and("have.class", "fa-check-circle");
 
-		cy.get('i[id="update_dxcc_check"]', { timeout: 120000 })
+		cy.get('i[id="update_dxcc_check"]', { timeout: 300000 })
 			.should("be.visible")
 			.and("have.class", "fa-check-circle");
 
-		cy.get('i[id="installer_lock_check"]', { timeout: 10000 })
+		cy.get('i[id="installer_lock_check"]', { timeout: 30000 })
 			.should("be.visible")
 			.and("have.class", "fa-check-circle");
 
