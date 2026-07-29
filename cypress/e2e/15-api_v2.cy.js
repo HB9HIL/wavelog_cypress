@@ -1,0 +1,1774 @@
+// Wavelog ships two parallel APIs: the older v1 (RPC-style, key in the JSON body
+// or as a URL segment, covered by 14-api_v1.cy.js) and the newer v2 (REST, Bearer
+// token). This spec is the v2 contract: every resource and verb, the happy paths
+// plus the auth/scope/validation error cases.
+//
+// v2 authenticates with a "wl2_" token, not the session cookie. There is no API
+// endpoint to mint a token, so we create them once through the session-based UI
+// controller (api_token/generate). That POST redirects back to /index.php/api,
+// whose page reveals the freshly created plaintext token exactly once in the
+// #newTokenValue input; we scrape it from the redirected HTML.
+
+describe("API v2", () => {
+	// The installer creates user_id 1 (an administrator) with a default, active
+	// station location (station_profile_id 1). 02-stationsetup.cy.js adds a
+	// second, non-active location. Ownership in v2 is derived from the token.
+	const STATION_PROFILE_ID = 1;
+	const API = "/index.php/api/v2";
+
+	// Every scope the registry offers, for a token that can do everything.
+	const ALL_SCOPES = [
+		"qso:read", "qso:write", "qso:delete",
+		"station:read", "station:write", "station:delete",
+		"radio:read", "radio:write", "radio:delete",
+		"statistic:read",
+		"lookup:read", "club:read",
+	];
+	// A read-only token: reads succeed, writes/deletes must be refused.
+	const READ_SCOPES = ["qso:read", "station:read", "radio:read", "statistic:read"];
+
+	let fullKey; // token carrying ALL_SCOPES
+	let roKey;   // token carrying READ_SCOPES
+
+	// State handed between the ordered CRUD tests.
+	let qsoId;
+	let stationId;
+	let radioId;
+
+	// Token minting lives in cy.createApiToken() (support/commands.js) so the
+	// clubstation spec can reuse it.
+
+	// Authorization header helper.
+	const auth = (token) => ({ Authorization: "Bearer " + token });
+
+	// Every API v2 JSON response includes common request metadata.
+	function expectCommonMeta(response, resource, method = "GET") {
+		expect(response.body).to.have.property("meta");
+		expect(response.body.meta).to.have.property("resource", resource);
+		expect(response.body.meta).to.have.property("method", method);
+		expect(response.body.meta).to.have.property("timestamp");
+		expect(Date.parse(response.body.meta.timestamp), "ISO timestamp").to.not.satisfy(Number.isNaN);
+	}
+
+	before(() => {
+		cy.setCookie("language", "english");
+		cy.login();
+		cy.getCookies().then((cookies) => {
+			cy.writeFile("cypress/fixtures/cookies.json", cookies);
+		});
+
+		cy.createApiToken("cypress-v2-full", ALL_SCOPES).then((t) => (fullKey = t));
+		cy.createApiToken("cypress-v2-readonly", READ_SCOPES).then((t) => (roKey = t));
+	});
+
+	beforeEach(() => {
+		cy.readFile("cypress/fixtures/cookies.json").then((cookies) => {
+			cookies.forEach((cookie) => {
+				cy.setCookie(cookie.name, cookie.value);
+			});
+		});
+	});
+
+	// --- Meta endpoint (public, no auth) ----------------------------------
+
+	describe("Meta", () => {
+		it("GET /api/v2 returns the public status envelope", () => {
+			cy.request(API).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.deep.include({
+					name: "Wavelog API",
+					status: "ok",
+				});
+				expectCommonMeta(response, "status", "GET");
+			});
+		});
+
+		it("GET /api/v2/status is the same public meta endpoint", () => {
+			cy.request(`${API}/status`).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.have.property("status", "ok");
+				expectCommonMeta(response, "status", "GET");
+			});
+		});
+
+		it("POST /api/v2/status is rejected with 405 and an Allow header", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/status`,
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(405);
+				expect(response.body.error).to.have.property("code", "method_not_allowed");
+				expect(response.headers).to.have.property("allow");
+			});
+		});
+
+		it("CORS headers are present on real responses, not just the preflight", () => {
+			// A preflight that passes is useless if the actual response lacks the
+			// header: the browser would clear the request and then block the answer.
+			cy.request(`${API}/status`).then((response) => {
+				expect(response.headers["access-control-allow-origin"]).to.eq("*");
+			});
+		});
+
+		it("CORS headers are present on error responses too", () => {
+			// Without this a JS client cannot read why a call failed.
+			cy.request({
+				method: "GET",
+				url: `${API}/token`,
+				headers: { Authorization: "Bearer wl2_definitely_not_a_valid_token" },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(401);
+				expect(response.headers["access-control-allow-origin"]).to.eq("*");
+			});
+		});
+
+		it("OPTIONS preflight returns 204 with CORS headers", () => {
+			cy.request({
+				method: "OPTIONS",
+				url: `${API}/qso`,
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(204);
+				expect(response.headers["access-control-allow-origin"]).to.eq("*");
+				expect(response.headers["access-control-allow-methods"]).to.include("PATCH");
+			});
+		});
+	});
+
+	// --- Authentication & authorization -----------------------------------
+
+	describe("Authentication", () => {
+		it("rejects a request without a token (401 unauthorized)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso`,
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(401);
+				expect(response.body.error).to.have.property("code", "unauthorized");
+			});
+		});
+
+		it("rejects a non-wl2 / legacy token (401 invalid_token)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso`,
+				headers: auth("notavalidtoken"),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(401);
+				expect(response.body.error).to.have.property("code", "invalid_token");
+			});
+		});
+
+		it("rejects an unknown wl2 token (401 invalid_token)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso`,
+				headers: auth("wl2_" + "0".repeat(40)),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(401);
+				expect(response.body.error).to.have.property("code", "invalid_token");
+			});
+		});
+
+		it("accepts the token via the X-API-Key fallback header", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/station`,
+				headers: { "X-API-Key": fullKey },
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.be.an("array");
+			});
+		});
+
+		it("rejects a write when the token lacks the scope (403 insufficient_scope)", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(roKey),
+				body: {
+					station_profile_id: STATION_PROFILE_ID,
+					call: "V2SCOPE",
+					band: "20m",
+					mode: "SSB",
+					qso_date: "2024-01-03",
+					time_on: "1200",
+				},
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(403);
+				expect(response.body.error).to.have.property("code", "insufficient_scope");
+				expect(response.body.error.details).to.have.property("required_scope", "qso:write");
+			});
+		});
+
+		it("returns 404 for an unknown resource", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/nonexistent`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+	});
+
+	// --- Dispatcher: URL shape and verb handling --------------------------
+	//
+	// These assert the routing layer itself rather than any one resource: which
+	// URLs exist at all, and which verbs a resource advertises.
+
+	describe("Dispatcher", () => {
+		// The Allow header is derived from the verb methods a resource actually
+		// implements, so it can never advertise a verb that only ends in the base
+		// class' 405 stub. Asserting the exact set is the point here: a hardcoded
+		// list would drift from the resources without any test noticing.
+		const ALLOW_BY_RESOURCE = {
+			qso: ["GET", "POST", "PATCH", "DELETE"],
+			station: ["GET", "POST", "PATCH", "DELETE"],
+			radio: ["GET", "POST", "DELETE"],
+			lookup: ["GET"],
+			statistic: ["GET"],
+			club: ["GET"],
+			token: ["GET"],
+		};
+
+		Object.entries(ALLOW_BY_RESOURCE).forEach(([resource, verbs]) => {
+			it(`Allow on /${resource} lists exactly the implemented verbs`, () => {
+				// PUT is implemented by no resource, so it always 405s and the
+				// response carries the full Allow set for that resource.
+				cy.request({
+					method: "PUT",
+					url: `${API}/${resource}/1`,
+					headers: auth(fullKey),
+					failOnStatusCode: false,
+				}).then((response) => {
+					expect(response.status).to.eq(405);
+					expect(response.body.error).to.have.property("code", "method_not_allowed");
+					expect(response.headers).to.have.property("allow");
+					const allowed = response.headers.allow
+						.split(",")
+						.map((v) => v.trim())
+						.sort();
+					expect(allowed).to.deep.eq([...verbs].sort());
+				});
+			});
+		});
+
+		// A verb a resource does not implement is a 405, not a permission problem.
+		// Were the scope checked first, a POST to a read-only resource would answer
+		// "insufficient_scope: lookup:write" — a scope that is not in the registry
+		// and that no token can ever hold, hiding the real reason from the client.
+		["lookup", "statistic", "club", "token"].forEach((resource) => {
+			it(`POST /${resource} is 405, not 403 insufficient_scope`, () => {
+				cy.request({
+					method: "POST",
+					url: `${API}/${resource}`,
+					headers: auth(fullKey),
+					body: {},
+					failOnStatusCode: false,
+				}).then((response) => {
+					expect(response.status).to.eq(405);
+					expect(response.body.error).to.have.property("code", "method_not_allowed");
+					expect(response.headers.allow).to.eq("GET");
+				});
+			});
+		});
+
+		// The URL space is exactly /<resource>[/<id>]. Anything deeper is a URL
+		// that does not exist; silently ignoring the surplus segments would answer
+		// a request the client never made.
+		[
+			"/qso/1/foo",
+			"/qso/1/foo/bar",
+			"/station/1/x",
+			"/status/foo",
+		].forEach((path) => {
+			it(`GET ${path} returns 404`, () => {
+				cy.request({
+					method: "GET",
+					url: `${API}${path}`,
+					headers: auth(fullKey),
+					failOnStatusCode: false,
+				}).then((response) => {
+					expect(response.status).to.eq(404);
+					expect(response.body.error).to.have.property("code", "not_found");
+				});
+			});
+		});
+
+		it("DELETE on a too-deep path is refused as well", () => {
+			cy.request({
+				method: "DELETE",
+				url: `${API}/qso/1/foo`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+
+		// The path shape is a client error regardless of credentials, so it is
+		// rejected before authentication runs.
+		it("a too-deep path is refused without a token as well (404, not 401)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso/1/foo`,
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+
+		// A trailing slash produces an empty segment, which is dropped rather than
+		// counted against the two-segment limit. Station 1 is the installer's
+		// default location and always exists.
+		["/qso/", `/station/${STATION_PROFILE_ID}/`].forEach((path) => {
+			it(`GET ${path} still resolves`, () => {
+				cy.request({
+					method: "GET",
+					url: `${API}${path}`,
+					headers: auth(fullKey),
+				}).then((response) => {
+					expect(response.status).to.eq(200);
+				});
+			});
+		});
+	});
+
+	// --- QSOs resource (qso:read / qso:write / qso:delete) -----------------
+
+	describe("QSOs", () => {
+		it("POST /api/v2/qso creates a QSO (201 + Location)", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				body: {
+					station_profile_id: STATION_PROFILE_ID,
+					call: "V2API1",
+					band: "20m",
+					mode: "SSB",
+					freq: 14075000,
+					qso_date: "2024-01-02",
+					time_on: "1210",
+					rst_sent: "59",
+					rst_rcvd: "57",
+					gridsquare: "JN47",
+					name: "Cypress",
+				},
+			}).then((response) => {
+				expect(response.status).to.eq(201);
+				expect(response.headers).to.have.property("location");
+				expect(response.headers.location).to.include("/api/v2/qso/");
+				const qso = response.body.data;
+				expect(qso.call).to.eq("V2API1");
+				expect(qso.mode).to.eq("SSB");
+				expect(Number(qso.freq)).to.eq(14075000);
+				expect(qso.id).to.be.a("number");
+				qsoId = qso.id;
+			});
+		});
+
+		it("GET /api/v2/qso lists QSOs with pagination meta", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?per_page=100`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.be.an("array").and.have.length.greaterThan(0);
+				expect(response.body.meta).to.include({ page: 1, per_page: 100 });
+				expect(response.body.meta.count).to.be.a("number");
+				// Pagination totals let a client find the last page without probing.
+				expect(response.body.meta.total).to.be.a("number");
+				expect(response.body.meta.total_pages).to.be.a("number");
+				expect(response.body.meta).to.have.property("has_more");
+			});
+		});
+
+		it("GET /api/v2/qso pagination reports total_pages and has_more", () => {
+			// Page 1 of 1-per-page: if there is more than one QSO, has_more is true
+			// and total_pages equals total; the last page reports has_more false.
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?per_page=1&page=1`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				const meta = response.body.meta;
+				expect(meta.total_pages).to.eq(meta.total);
+				expect(meta.has_more).to.eq(meta.total > 1);
+
+				// Fetch the last page and confirm has_more flips to false.
+				cy.request({
+					method: "GET",
+					url: `${API}/qso?per_page=1&page=${meta.total_pages}`,
+					headers: auth(fullKey),
+				}).then((last) => {
+					expect(last.body.meta.has_more).to.eq(false);
+				});
+			});
+		});
+
+		it("GET /api/v2/qso?band= filters by band", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?band=20m`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.be.an("array");
+				response.body.data.forEach((qso) => {
+					expect(qso.band).to.eq("20m");
+				});
+			});
+		});
+
+		it("GET /api/v2/qso/{id} returns the single QSO", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso/${qsoId}`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.id).to.eq(qsoId);
+				expect(response.body.data.call).to.eq("V2API1");
+			});
+		});
+
+		it("PATCH /api/v2/qso/{id} updates only the given fields", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/qso/${qsoId}`,
+				headers: auth(fullKey),
+				body: { comment: "Patched by Cypress", rst_rcvd: "59" },
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.comment).to.eq("Patched by Cypress");
+				expect(response.body.data.rst_rcvd).to.eq("59");
+				// A field we did not send must be untouched.
+				expect(response.body.data.call).to.eq("V2API1");
+			});
+		});
+
+		it("POST /api/v2/qso without a required field returns 400", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+				body: {
+					station_profile_id: STATION_PROFILE_ID,
+					band: "20m",
+					mode: "SSB",
+					qso_date: "2024-01-02",
+					time_on: "1220",
+				}, // missing "call"
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+				expect(response.body.error.details.missing).to.include("call");
+			});
+		});
+
+		it("POST /api/v2/qso with a foreign station_profile_id returns 403", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+				body: {
+					station_profile_id: 999999,
+					call: "V2API9",
+					band: "20m",
+					mode: "SSB",
+					qso_date: "2024-01-02",
+					time_on: "1221",
+				},
+			}).then((response) => {
+				expect(response.status).to.eq(403);
+				expect(response.body.error).to.have.property("code", "forbidden");
+			});
+		});
+
+		it("POST /api/v2/qso with a non-scalar field returns 400", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+				body: { station_profile_id: STATION_PROFILE_ID, nested: { a: 1 } },
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("POST /api/v2/qso with malformed JSON returns 400 invalid_json", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: { ...auth(fullKey), "content-type": "application/json" },
+				failOnStatusCode: false,
+				body: "{ not valid json",
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "invalid_json");
+			});
+		});
+
+		it("PATCH /api/v2/qso without an id returns 404", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+				body: { comment: "no id" },
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+
+		it("DELETE /api/v2/qso/{id} removes the QSO (204)", () => {
+			cy.request({
+				method: "DELETE",
+				url: `${API}/qso/${qsoId}`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(204);
+			});
+		});
+
+		it("GET /api/v2/qso/{id} of a deleted QSO returns 404", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso/${qsoId}`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+
+		it("PUT /api/v2/qso/{id} is not supported (405)", () => {
+			cy.request({
+				method: "PUT",
+				url: `${API}/qso/1`,
+				headers: auth(fullKey),
+				body: { call: "V2/4W7EST", band: "20m" },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(405);
+				expect(response.body.error).to.have.property("code", "method_not_allowed");
+			});
+		});
+
+		it("POST /api/v2/qso/{id} is rejected instead of creating a duplicate", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso/1`,
+				headers: auth(fullKey),
+				body: { station_profile_id: STATION_PROFILE_ID, call: "V2/4W7EST" },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(405);
+				expect(response.headers).to.have.property("allow");
+				expect(response.headers.allow).to.contain("PATCH");
+				expect(response.headers.allow).to.not.contain("POST");
+			});
+		});
+	});
+
+	// --- Stations resource (station:read / station:write / station:delete) -
+
+	describe("Stations", () => {
+		const NEW_STATION = {
+			name: "Cypress V2 Location",
+			callsign: "V2/4W7EST",
+			gridsquare: "JN47RI",
+			dxcc: 287,
+			cq: 14,
+			itu: 28,
+			power: 100,
+		};
+
+		it("GET /api/v2/station lists the owner's station locations", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/station`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.be.an("array").and.have.length.greaterThan(0);
+				const active = response.body.data.find((s) => s.active === true);
+				expect(active, "an active station exists").to.exist;
+			});
+		});
+
+		it("GET /api/v2/station/{id} returns the default station", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/station/${STATION_PROFILE_ID}`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.id).to.eq(STATION_PROFILE_ID);
+				expect(response.body.data).to.have.property("callsign");
+			});
+		});
+
+		it("POST /api/v2/station creates a station (201 + Location)", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/station`,
+				headers: auth(fullKey),
+				body: NEW_STATION,
+			}).then((response) => {
+				expect(response.status).to.eq(201);
+				expect(response.headers.location).to.include("/api/v2/station/");
+				const station = response.body.data;
+				expect(station.name).to.eq(NEW_STATION.name);
+				expect(station.callsign).to.eq(NEW_STATION.callsign);
+				// A user with an existing active station: the new one is not active.
+				expect(station.active).to.eq(false);
+				expect(station.id).to.be.a("number");
+				stationId = station.id;
+			});
+		});
+
+		it("POST /api/v2/station with the same data returns 409 conflict", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/station`,
+				headers: auth(fullKey),
+				body: NEW_STATION,
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(409);
+				expect(response.body.error).to.have.property("code", "conflict");
+			});
+		});
+
+		it("POST /api/v2/station without required fields returns 400", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/station`,
+				headers: auth(fullKey),
+				body: { gridsquare: "JN47RI" }, // missing name, callsign, dxcc, cq, itu
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("POST /api/v2/station with an invalid grid returns 400", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/station`,
+				headers: auth(fullKey),
+				// Every required field is supplied, so the grid is the only thing
+				// left to reject - otherwise this would pass on the missing-field
+				// check instead and stop testing the locator at all.
+				body: {
+					name: "Bad Grid", callsign: "V2/BAD", gridsquare: "ZZ99zz",
+					dxcc: 287, cq: 14, itu: 28,
+				},
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("PATCH /api/v2/station/{id} updates the given fields", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/station/${stationId}`,
+				headers: auth(fullKey),
+				body: { power: 50, city: "Bonn" },
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.power).to.eq(50);
+				expect(response.body.data.city).to.eq("Bonn");
+			});
+		});
+
+		it("PATCH /api/v2/station/{id} leaves omitted fields alone", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/station/${stationId}`,
+				headers: auth(fullKey),
+				body: { name: "Cypress V2 Renamed", gridsquare: "JN48RI" },
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.name).to.eq("Cypress V2 Renamed");
+				expect(response.body.data.gridsquare).to.eq("JN48RI");
+				// power was set by the previous PATCH and must survive: there is
+				// no PUT, so nothing ever resets an omitted field.
+				expect(response.body.data.power).to.eq(50);
+				expect(response.body.data.city).to.eq("Bonn");
+			});
+		});
+
+		// DXCC, CQ and ITU end up in integer columns on every QSO logged from the
+		// location. Blanking one out would leave a location that looks fine but
+		// makes QSO creation fail, so PATCH refuses to clear it.
+		it("PATCH /api/v2/station/{id} cannot clear a required field (400)", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/station/${stationId}`,
+				headers: auth(fullKey),
+				body: { cq: null },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+				expect(response.body.error.details.fields).to.include("cq");
+			});
+		});
+
+		it("PUT /api/v2/station/{id} is not supported (405)", () => {
+			cy.request({
+				method: "PUT",
+				url: `${API}/station/${stationId}`,
+				headers: auth(fullKey),
+				body: { name: "Cypress V2 Replaced", callsign: "V2/4W7EST" },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(405);
+				expect(response.body.error).to.have.property("code", "method_not_allowed");
+			});
+		});
+
+		it("DELETE /api/v2/station/{id} of the active station returns 409", () => {
+			cy.request({
+				method: "DELETE",
+				url: `${API}/station/${STATION_PROFILE_ID}`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(409);
+				expect(response.body.error).to.have.property("code", "conflict");
+			});
+		});
+
+		it("DELETE /api/v2/station/{id} removes the created station (204)", () => {
+			cy.request({
+				method: "DELETE",
+				url: `${API}/station/${stationId}`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(204);
+			});
+		});
+
+		it("GET /api/v2/station/{id} of a deleted station returns 404", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/station/${stationId}`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+	});
+
+	// --- Radios resource (radio:read / radio:write / radio:delete) ---------
+
+	describe("Radios", () => {
+		const RADIO_NAME = "Cypress-Rig";
+
+		it("POST /api/v2/radio creates a radio (201 + Location)", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/radio`,
+				headers: auth(fullKey),
+				body: { radio: RADIO_NAME, frequency: 14075000, mode: "SSB", power: 100 },
+			}).then((response) => {
+				expect(response.status).to.eq(201);
+				expect(response.headers.location).to.include("/api/v2/radio/");
+				const radio = response.body.data;
+				expect(radio.radio).to.eq(RADIO_NAME);
+				expect(radio.frequency).to.eq(14075000);
+				expect(radio.mode).to.eq("SSB");
+				expect(radio.id).to.be.a("number");
+				radioId = radio.id;
+			});
+		});
+
+		it("POST /api/v2/radio with an existing name upserts (200)", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/radio`,
+				headers: auth(fullKey),
+				body: { radio: RADIO_NAME, frequency: 7030000, mode: "CW", power: 50 },
+			}).then((response) => {
+				expectCommonMeta(response, "radio", "POST");
+				expect(response.status).to.eq(200);
+				expect(response.body.data.id).to.eq(radioId);
+				expect(response.body.data.frequency).to.eq(7030000);
+				expect(response.body.data.mode).to.eq("CW");
+			});
+		});
+
+		it("GET /api/v2/radio lists the owner's radios", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/radio`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.be.an("array");
+				const mine = response.body.data.find((r) => r.id === radioId);
+				expect(mine, "created radio is listed").to.exist;
+			});
+		});
+
+		it("GET /api/v2/radio/{id} returns the single radio", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/radio/${radioId}`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.id).to.eq(radioId);
+				expect(response.body.data.radio).to.eq(RADIO_NAME);
+			});
+		});
+
+		it("POST /api/v2/radio without the radio name returns 400", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/radio`,
+				headers: auth(fullKey),
+				body: { frequency: 14075000 },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("PATCH /api/v2/radio/{id} is not supported (405)", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/radio/${radioId}`,
+				headers: auth(fullKey),
+				body: { mode: "FT8" },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(405);
+				expect(response.body.error).to.have.property("code", "method_not_allowed");
+			});
+		});
+
+		it("GET /api/v2/radio/{id} of an unknown radio returns 404", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/radio/999999`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+
+		it("DELETE /api/v2/radio/{id} removes the radio (204)", () => {
+			cy.request({
+				method: "DELETE",
+				url: `${API}/radio/${radioId}`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(204);
+			});
+		});
+	});
+
+	// --- Statistic resource (statistic:read, read-only) --------------------
+
+	describe("Statistics", () => {
+		it("GET /api/v2/statistic returns the qso topic by default", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/statistic`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expectCommonMeta(response, "statistic", "GET");
+				expect(response.body.meta).to.have.property("profile", "qso");
+				const qso = response.body.data.qso;
+				expect(qso).to.have.property("total");
+				expect(Number(qso.total)).to.be.a("number");
+				expect(qso.activity).to.have.all.keys("today", "month", "year");
+				expect(qso.breakdown).to.have.all.keys("by_band", "by_mode");
+				expect(qso.dxcc).to.have.all.keys("worked", "confirmed", "available");
+			});
+		});
+
+		it("GET /api/v2/statistic?profile=full returns every permitted topic", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/statistic?profile=full`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta).to.have.property("profile", "full");
+				expect(response.body.data).to.have.property("qso");
+				expect(response.body.data).to.have.property("confirmations");
+			});
+		});
+
+		// The confirmations topic counts QSL confirmations per type, with a band
+		// and a mode breakdown next to the grand totals. Numbers depend on the
+		// ADIF import in 06-adif, so the assertions stay structural/relational
+		// rather than pinning exact values.
+		const CONFIRMATION_TYPES = ["lotw", "eqsl", "qsl", "qrz", "clublog"];
+		let confirmationTotals; // counts from the unfiltered call, reused below
+
+		it("GET /api/v2/statistic?profile=confirmations returns totals plus band and mode breakdowns", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/statistic?profile=confirmations`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta).to.have.property("profile", "confirmations");
+
+				const c = response.body.data.confirmations;
+				expect(c).to.have.all.keys("counts", "by_band", "by_mode", "filters");
+				expect(c.counts).to.have.all.keys("qsos", ...CONFIRMATION_TYPES, "confirmed");
+				CONFIRMATION_TYPES.forEach((type) => {
+					expect(c.counts[type], type).to.be.a("number");
+				});
+
+				expect(c.by_band).to.be.an("array");
+				expect(c.by_mode).to.be.an("array");
+				c.by_band.forEach((row) => {
+					expect(row).to.have.all.keys("band", "qsos", ...CONFIRMATION_TYPES, "confirmed");
+					// confirmed counts QSOs with at least one confirmation, so it
+					// can never exceed the QSOs it was drawn from.
+					expect(row.confirmed, row.band).to.be.at.most(row.qsos);
+				});
+				c.by_mode.forEach((row) => {
+					expect(row).to.have.all.keys("mode", "qsos", ...CONFIRMATION_TYPES, "confirmed");
+					expect(row.confirmed, row.mode).to.be.at.most(row.qsos);
+				});
+
+				expect(c.filters.type).to.deep.eq(CONFIRMATION_TYPES);
+				expect(c.filters.since).to.eq(null);
+
+				confirmationTotals = c.counts;
+			});
+		});
+
+		it("GET /api/v2/statistic?profile=confirmations breakdowns add up to the totals", () => {
+			// The breakdowns come from separate GROUP BY queries, so summing them
+			// back to the grand totals proves both paths agree on the same data.
+			cy.request({
+				method: "GET",
+				url: `${API}/statistic?profile=confirmations`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				const c = response.body.data.confirmations;
+				["by_band", "by_mode"].forEach((group) => {
+					["qsos", ...CONFIRMATION_TYPES, "confirmed"].forEach((type) => {
+						const sum = c[group].reduce((acc, row) => acc + row[type], 0);
+						expect(sum, `${group}.${type}`).to.eq(c.counts[type]);
+					});
+				});
+			});
+		});
+
+		it("GET /api/v2/statistic?profile=confirmations&type=lotw,eqsl narrows to the requested types", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/statistic?profile=confirmations&type=lotw,eqsl`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				const c = response.body.data.confirmations;
+				expect(c.counts).to.have.all.keys("qsos", "lotw", "eqsl", "confirmed");
+				expect(c.filters.type).to.deep.eq(["lotw", "eqsl"]);
+				c.by_band.forEach((row) => {
+					expect(row).to.have.all.keys("band", "qsos", "lotw", "eqsl", "confirmed");
+				});
+			});
+		});
+
+		it("GET /api/v2/statistic?profile=confirmations&since=<today> can only lower the counts", () => {
+			const today = new Date().toISOString().slice(0, 10);
+			cy.request({
+				method: "GET",
+				url: `${API}/statistic?profile=confirmations&since=${today}`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				const counts = response.body.data.confirmations.counts;
+				expect(response.body.data.confirmations.filters.since).to.eq(today);
+				CONFIRMATION_TYPES.forEach((type) => {
+					expect(counts[type], type).to.be.at.most(confirmationTotals[type]);
+				});
+			});
+		});
+
+		it("GET /api/v2/statistic?profile=confirmations&band=&mode= filters without erroring", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/statistic?profile=confirmations&band=20m&mode=FT8`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				const c = response.body.data.confirmations;
+				expect(c.filters.band).to.eq("20m");
+				expect(c.filters.mode).to.eq("FT8");
+				CONFIRMATION_TYPES.forEach((type) => {
+					expect(c.counts[type], type).to.be.at.most(confirmationTotals[type]);
+				});
+				// Narrowing to one band/mode leaves at most that single group.
+				expect(c.by_band.length).to.be.at.most(1);
+				expect(c.by_mode.length).to.be.at.most(1);
+			});
+		});
+
+		it("GET /api/v2/statistic?profile=confirmations&type=hrdlog returns 400", () => {
+			// HRDLog is upload-only in Wavelog, so it is not a confirmation type.
+			cy.request({
+				method: "GET",
+				url: `${API}/statistic?profile=confirmations&type=hrdlog`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+				expect(response.body.error.details.allowed).to.include("lotw");
+			});
+		});
+
+		it("GET /api/v2/statistic?profile=confirmations with a malformed date returns 400", () => {
+			// 2026-02-31 is well-formed but not a real date; it must not roll over
+			// into March.
+			["since=notadate", "since=2026-02-31", "qso_since=notadate"].forEach((query) => {
+				cy.request({
+					method: "GET",
+					url: `${API}/statistic?profile=confirmations&${query}`,
+					headers: auth(fullKey),
+					failOnStatusCode: false,
+				}).then((response) => {
+					expect(response.status, query).to.eq(400);
+					expect(response.body.error).to.have.property("code", "validation_error");
+					expect(response.body.error.details).to.have.property("format", "YYYY-MM-DD");
+				});
+			});
+		});
+
+		it("GET /api/v2/statistic?profile=system returns instance info for an admin", () => {
+			// user_id 1 is an administrator, so the admin-only system topic is
+			// available and meta.admin is true.
+			cy.request({
+				method: "GET",
+				url: `${API}/statistic?profile=system`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta).to.have.property("admin", true);
+				expect(response.body.data.system).to.have.property("wavelog");
+				expect(response.body.data.system).to.have.property("php");
+			});
+		});
+
+		it("GET /api/v2/statistic?profile=bogus returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/statistic?profile=bogus`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("POST /api/v2/statistic is refused: the resource is read-only (405)", () => {
+			// The resource implements no write verb, which the dispatcher settles
+			// before it ever looks at scopes. A scope check here would report
+			// "insufficient_scope: statistic:write" — a scope that is not in the
+			// registry and that no token can hold, pointing at the wrong problem.
+			cy.request({
+				method: "POST",
+				url: `${API}/statistic`,
+				headers: auth(fullKey),
+				body: {},
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(405);
+				expect(response.body.error).to.have.property("code", "method_not_allowed");
+				expect(response.headers.allow).to.eq("GET");
+			});
+		});
+	});
+
+	// --- QSO ADIF import & export (qso:write / qso:read) -------------------
+
+	describe("QSO ADIF", () => {
+		const ADIF_CALL = "V2ADIF1";
+		// A single, self-contained ADIF record. Lengths must match the values.
+		const ADIF = `<CALL:${ADIF_CALL.length}>${ADIF_CALL}<QSO_DATE:8>20240104<TIME_ON:4>1230<BAND:3>20m<MODE:3>FT8<EOR>`;
+
+		it("POST import_type=adif with dryrun parses without importing", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				body: {
+					import_type: "adif",
+					station_profile_id: STATION_PROFILE_ID,
+					dryrun: true,
+					adif: ADIF,
+				},
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.include({ dryrun: true, parsed: 1 });
+			});
+		});
+
+		it("POST import_type=adif imports the QSO (201)", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				body: {
+					import_type: "adif",
+					station_profile_id: STATION_PROFILE_ID,
+					adif: ADIF,
+				},
+			}).then((response) => {
+				expect(response.status).to.eq(201);
+				expect(response.body.data.parsed).to.eq(1);
+				expect(response.body.data.imported).to.eq(1);
+				expect(response.body.data.skipped).to.eq(0);
+			});
+		});
+
+		it("POST import_type=adif again skips the duplicate", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				body: {
+					import_type: "adif",
+					station_profile_id: STATION_PROFILE_ID,
+					adif: ADIF,
+				},
+			}).then((response) => {
+				expect(response.status).to.eq(201);
+				expect(response.body.data.imported).to.eq(0);
+				expect(response.body.data.skipped).to.eq(1);
+			});
+		});
+
+		it("GET /api/v2/qso?format=adif exports incrementally", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?format=adif&since_id=0&station_id=${STATION_PROFILE_ID}`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.have.property("lastfetchedid");
+				expect(response.body.data.exported).to.be.a("number").and.to.be.greaterThan(0);
+				expect(response.body.data.adif).to.be.a("string").and.to.include(ADIF_CALL);
+				// ADIF shares the list's pagination meta.
+				expect(response.body.meta).to.have.property("total");
+				expect(response.body.meta).to.have.property("has_more");
+			});
+		});
+
+		it("GET /api/v2/qso per_page is honoured up to the 5000 cap (both formats)", () => {
+			// Both JSON and ADIF share a 5000 max; an over-large per_page clamps.
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?per_page=1000`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta.per_page).to.eq(1000);
+			});
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?per_page=99999`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta.per_page).to.eq(5000);
+			});
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?format=adif&per_page=99999`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta.per_page).to.eq(5000);
+			});
+		});
+
+		it("GET /api/v2/qso?limit= returns the newest N QSOs", () => {
+			// limit=1 must return exactly the newest QSO, matching page 1 of a
+			// per_page=1 request (both are newest-first).
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?limit=1`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.have.length(1);
+				expect(response.body.meta.per_page).to.eq(1);
+				const newest = response.body.data[0].id;
+
+				cy.request({
+					method: "GET",
+					url: `${API}/qso?per_page=1&page=1`,
+					headers: auth(fullKey),
+				}).then((cmp) => {
+					expect(cmp.body.data[0].id).to.eq(newest);
+				});
+			});
+		});
+
+		it("GET /api/v2/qso?limit=0 returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?limit=0`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("GET /api/v2/qso applies the common filters (json)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?station_id=${STATION_PROFILE_ID}&since_id=0&band=20m&per_page=5`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.be.an("array");
+				expect(response.body.meta.total).to.be.a("number");
+				response.body.data.forEach((qso) => expect(qso.band).to.eq("20m"));
+			});
+		});
+
+		it("GET /api/v2/qso?mode= filters by mode or submode", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?mode=SSB&per_page=5`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.be.an("array");
+				// Every row matches on the main mode or the submode.
+				response.body.data.forEach((qso) =>
+					expect(qso.mode === "SSB" || qso.submode === "SSB").to.eq(true)
+				);
+			});
+		});
+
+		it("GET /api/v2/qso?station_id= of a foreign station returns 403", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?station_id=999999`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(403);
+				expect(response.body.error).to.have.property("code", "forbidden");
+			});
+		});
+
+		it("GET /api/v2/qso?since_id=abc returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?since_id=abc`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("GET /api/v2/qso?qsl_filter=bogus returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?qsl_filter=bogus`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("GET /api/v2/qso?qsl_filter=qrz is accepted", () => {
+			// QRZ.com is a confirmation source like LoTW/eQSL/paper/Clublog and
+			// must be filterable too.
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?qsl_filter=qrz&limit=1`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.be.an("array");
+			});
+		});
+
+		it("POST with an unknown import_type returns 400", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				body: { import_type: "xml", station_profile_id: STATION_PROFILE_ID },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("GET /api/v2/qso?format=bogus returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?format=bogus`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		after(() => {
+			// Remove the imported QSO so re-runs start clean.
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?per_page=500`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				const hit = response.body.data.find((q) => q.call === ADIF_CALL);
+				if (hit) {
+					cy.request({
+						method: "DELETE",
+						url: `${API}/qso/${hit.id}`,
+						headers: auth(fullKey),
+					});
+				}
+			});
+		});
+	});
+
+	// --- QSO bulk JSON import (qso:write) ----------------------------------
+
+	describe("QSO JSON bulk", () => {
+		const CALLS = ["V2JB1", "V2JB2"];
+		const qsos = [
+			{ call: CALLS[0], band: "20m", mode: "FT8", qso_date: "2024-02-01", time_on: "1200" },
+			{ call: CALLS[1], band: "40m", mode: "CW", qso_date: "2024-02-01", time_on: "1201" },
+		];
+
+		it("POST with a qsos array and dryrun validates without importing", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				body: { station_profile_id: STATION_PROFILE_ID, dryrun: true, qsos },
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.include({ dryrun: true, parsed: 2 });
+			});
+		});
+
+		it("POST with a qsos array imports them all (201)", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				body: { station_profile_id: STATION_PROFILE_ID, qsos },
+			}).then((response) => {
+				expect(response.status).to.eq(201);
+				expect(response.body.data.parsed).to.eq(2);
+				expect(response.body.data.imported).to.eq(2);
+			});
+		});
+
+		it("POST with a missing field flags the offending row index (400)", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+				body: {
+					station_profile_id: STATION_PROFILE_ID,
+					qsos: [
+						{ call: "V2JBOK", band: "20m", mode: "FT8", qso_date: "2024-02-01", time_on: "1200" },
+						{ band: "40m", mode: "CW", qso_date: "2024-02-01", time_on: "1201" }, // no call
+					],
+				},
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+				expect(response.body.error.details).to.have.property("index", 1);
+			});
+		});
+
+		it("POST with an empty qsos array returns 400", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+				body: { station_profile_id: STATION_PROFILE_ID, qsos: [] },
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		after(() => {
+			// Remove the imported bulk QSOs so re-runs start clean.
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?per_page=500`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				response.body.data
+					.filter((q) => CALLS.includes(q.call))
+					.forEach((q) =>
+						cy.request({ method: "DELETE", url: `${API}/qso/${q.id}`, headers: auth(fullKey) })
+					);
+			});
+		});
+	});
+
+	// --- Lookup resource (lookup:read, read-only) --------------------------
+
+	describe("Lookup", () => {
+		it("GET /api/v2/lookup with a foreign station_ids is refused (403)", () => {
+			// Must not silently fall back to the token owner's own stations: that
+			// would answer with data the caller never asked for.
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?callsign=V2/4W7EST&station_ids=999999`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(403);
+				expect(response.body.error).to.have.property("code", "forbidden");
+			});
+		});
+
+		it("GET /api/v2/lookup with a non-numeric station_ids is rejected (400)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?callsign=V2/4W7EST&station_ids=abc`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("GET /api/v2/lookup/{id} returns 404, not 405", () => {
+			// Lookup has no addressable items, so the URL does not exist at all.
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup/1`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+
+		it("GET /api/v2/lookup?callsign= returns full DXCC data with full detail", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?callsign=DL1ABC&detail=full`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta).to.have.property("detail", "full");
+				expect(response.body.data).to.have.property("callsign", "DL1ABC");
+				expect(response.body.data).to.have.property("dxcc");
+				// Full detail exposes the per-band/mode worked flags.
+				expect(response.body.data).to.have.property("call_worked");
+			});
+		});
+
+		it("GET /api/v2/lookup?callsign= default detail omits the QSO history", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?callsign=DL1ABC`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta).to.have.property("detail", "basic");
+				expect(response.body.data).to.have.property("workedBefore");
+				expect(response.body.data).to.not.have.property("call_worked");
+			});
+		});
+
+		it("GET /api/v2/lookup?callsign=&detail=bogus returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?callsign=DL1ABC&detail=bogus`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("GET /api/v2/lookup?callsign= handles a slashed callsign", () => {
+			// Portable and DXCC-prefix calls carry a "/" — the query form passes
+			// them through unharmed.
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?callsign=${encodeURIComponent("DL1ABC/P")}`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.have.property("callsign", "DL1ABC/P");
+				expect(response.body.data).to.have.property("dxcc");
+			});
+		});
+
+		it("GET /api/v2/lookup?grid= reports a grid worked/confirmed result", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?grid=JN47`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta).to.have.property("type", "grid");
+				expect(response.body.data).to.have.property("gridsquare", "JN47");
+				expect(["Not Found", "Found", "Worked", "Confirmed"]).to.include(
+					response.body.data.result
+				);
+			});
+		});
+
+		// Both grid paths must validate cnfm. check_if_grid_worked_in_logbook()
+		// switches on the value and falls back to selecting the gridsquare itself
+		// for anything it does not know, so an unvalidated value would be compared
+		// against gridsquare substrings instead of a confirmation flag and report
+		// "Worked" rather than failing.
+		it("GET /api/v2/lookup?grid=&cnfm=bogus returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?grid=JN47&cnfm=bogus`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+				expect(response.body.error.details.allowed).to.deep.eq(["qsl", "lotw", "eqsl"]);
+			});
+		});
+
+		it("GET /api/v2/lookup?grid=&cnfm= accepts a valid type in any case", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?grid=JN47&cnfm=LOTW`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(["Not Found", "Worked", "Confirmed"]).to.include(
+					response.body.data.result
+				);
+			});
+		});
+
+		it("GET /api/v2/lookup?grid=all lists every worked gridsquare", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?grid=all`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta).to.have.property("type", "worked_grids");
+				expect(response.body.data.grids).to.be.an("array");
+				expect(response.body.data.count).to.eq(response.body.data.grids.length);
+				// Grids are normalised to 4 uppercase characters.
+				response.body.data.grids.forEach((grid) => {
+					expect(grid).to.match(/^[A-Z]{2}[0-9]{2}$/);
+				});
+			});
+		});
+
+		it("GET /api/v2/lookup?grid=all&band= narrows the result", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?grid=all`,
+				headers: auth(fullKey),
+			}).then((all) => {
+				cy.request({
+					method: "GET",
+					url: `${API}/lookup?grid=all&band=20m`,
+					headers: auth(fullKey),
+				}).then((response) => {
+					expect(response.status).to.eq(200);
+					expect(response.body.meta).to.have.property("band", "20m");
+					expect(response.body.data.count).to.be.at.most(all.body.data.count);
+				});
+			});
+		});
+
+		it("GET /api/v2/lookup?grid=all&cnfm=bogus returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?grid=all&cnfm=bogus`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("GET /api/v2/lookup?grid=all&logbook_id= of a foreign logbook returns 403", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?grid=all&logbook_id=999999`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(403);
+				expect(response.body.error).to.have.property("code", "forbidden");
+			});
+		});
+
+		it("GET /api/v2/lookup?grid=&logbook_id= of a foreign logbook returns 403", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?grid=JN47&logbook_id=999999`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(403);
+				expect(response.body.error).to.have.property("code", "forbidden");
+			});
+		});
+
+		it("GET /api/v2/lookup without a callsign or grid returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("GET /api/v2/lookup/{callsign} path form is gone and returns 404", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup/DL1ABC`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+
+		it("is refused for a token without lookup:read (403)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/lookup?callsign=DL1ABC`,
+				headers: auth(roKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(403);
+				expect(response.body.error).to.have.property("code", "insufficient_scope");
+			});
+		});
+	});
+
+	// --- Club resource (club:read, read-only) ------------------------------
+
+	describe("Club", () => {
+		it("GET /api/v2/club is refused for a non-officer/personal token (403)", () => {
+			// The test user's token is personal (owner == creator), so it is never a
+			// club officer and the endpoint refuses it.
+			cy.request({
+				method: "GET",
+				url: `${API}/club`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(403);
+				expect(response.body.error).to.have.property("code", "forbidden");
+			});
+		});
+	});
+
+	// --- Token resource (whoami, no scope) ---------------------------------
+
+	describe("Token", () => {
+		it("GET /api/v2/token returns the current token's metadata", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/token`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.have.property("id");
+				expect(response.body.data).to.have.property("owner");
+				expect(response.body.data.scopes).to.be.an("array").and.to.include("qso:read");
+				expect(response.body.data).to.have.property("expires_at");
+			});
+		});
+
+		it("GET /api/v2/token needs no particular scope (read-only token works)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/token`,
+				headers: auth(roKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.scopes).to.be.an("array");
+			});
+		});
+
+		it("GET /api/v2/token without a token returns 401", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/token`,
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(401);
+				expect(response.body.error).to.have.property("code", "unauthorized");
+			});
+		});
+	});
+});

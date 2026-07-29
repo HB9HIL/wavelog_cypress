@@ -57,6 +57,41 @@ Cypress.Commands.add("createApiKey", (type = "rw") => {
         });
 });
 
+// Mint an API v2 token ("wl2_...") through the web UI and yield its plaintext
+// value. Like the v1 keys there is no API endpoint to create one, so the
+// session-based controller is the only way: the POST to api_token/generate
+// stores the token and flashes the plaintext, and the followed redirect renders
+// /index.php/api with the one-time reveal modal we scrape it from.
+//
+// The token belongs to whoever the *current session* is. Called from a normal
+// admin session it yields a personal token (user_id == created_by); called
+// while club-switched it yields a club token (user_id = clubstation,
+// created_by = the acting member), which is what the clubstation permission
+// tests need.
+//
+// `scopes` is an array of scope ids, `expiry` one of "30" | "90" | "365" or
+// anything else for "never".
+Cypress.Commands.add("createApiToken", (name, scopes, expiry = "30") => {
+    const body = new URLSearchParams();
+    body.append("token_name", name);
+    body.append("expiry", expiry);
+    scopes.forEach((s) => body.append("scopes[]", s));
+
+    return cy
+        .request({
+            method: "POST",
+            url: "/index.php/api_token/generate",
+            headers: { "content-type": "application/x-www-form-urlencoded" },
+            body: body.toString(),
+        })
+        .then((response) => {
+            expect(response.status, "generate token page").to.eq(200);
+            const match = response.body.match(/id="newTokenValue"[^>]*value="(wl2_[0-9a-f]+)"/);
+            expect(match, `plaintext token for "${name}"`).to.not.be.null;
+            return match[1];
+        });
+});
+
 // POST a JSON body to a v1 API endpoint. The v1 API expects the key inside the
 // body (not a header), so callers pass it there — tests for the missing-key
 // case simply leave it out. `options` is merged into the cy.request config,
