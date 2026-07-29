@@ -1,6 +1,50 @@
 // installer is stateful, no retries allowed
 describe("Installer Test", { retries: 0 }, () => {
 
+	let logPollStartedAt = 0;
+	let lastLogBody = "";
+
+	const LOG_POLL_MAX_INFLIGHT = 10000;
+
+	function throttleDebugLogPolling() {
+		logPollStartedAt = 0;
+
+		cy.intercept("POST", "**/install/ajax.php", (req) => {
+			if (!String(req.body).includes("read_logfile")) {
+				return; // functional installer call -- leave untouched
+			}
+			if (logPollStartedAt && Date.now() - logPollStartedAt < LOG_POLL_MAX_INFLIGHT) {
+				req.reply({ statusCode: 200, body: lastLogBody });
+				return;
+			}
+			logPollStartedAt = Date.now();
+			req.continue((res) => {
+				lastLogBody = String(res.body ?? "");
+				logPollStartedAt = 0;
+			});
+		});
+	}
+
+	function waitForInstallStep(step, timeout) {
+		cy.get(`i[id="${step}_check"]`, { timeout })
+			.should("be.visible")
+			.and("not.have.class", "fa-times-circle");
+	}
+
+	Cypress.on("fail", (error) => {
+		try {
+			const errorText = Cypress.$("#error_message").text().trim();
+			const log = Cypress.$("#debuglog").text().trim();
+			if (errorText || log) {
+				error.message += `\n\n--- installer page ---\n${errorText || "(no error message)"}` +
+					`\n--- installer debug log (tail) ---\n${log.split("\n").slice(-40).join("\n")}`;
+			}
+		} catch (ignored) {
+			// no AUT document to read -- nothing to add
+		}
+		throw error;
+	});
+
 	// Helper function to visit the installer page
 	function visitInstallerPage() {
 		// Visit the index. We should get redirected
@@ -31,6 +75,7 @@ describe("Installer Test", { retries: 0 }, () => {
 	// Before each Test we have to call the installer again
 	beforeEach(() => {
 		cy.restoreLocalStorage();
+		throttleDebugLogPolling();
 		visitInstallerPage();
 	});
 
@@ -94,34 +139,15 @@ describe("Installer Test", { retries: 0 }, () => {
 			.contains("Installation")
 			.should("be.visible");
 
-		// Click the log button to stop the countdown timer
 		cy.get('button[id="toggleLogButton"]')
 			.click();
 
-		// Check if all steps show green after some time
-		cy.get('i[id="config_file_check"]', { timeout: 30000 })
-			.should("be.visible")
-			.and("have.class", "fa-check-circle");
-
-		cy.get('i[id="database_file_check"]', { timeout: 30000 })
-			.should("be.visible")
-			.and("have.class", "fa-check-circle");
-
-		cy.get('i[id="database_tables_check"]', { timeout: 60000 })
-			.should("be.visible")
-			.and("have.class", "fa-check-circle");
-
-		cy.get('i[id="database_migrations_check"]', { timeout: 600000 })
-			.should("be.visible")
-			.and("have.class", "fa-check-circle");
-
-		cy.get('i[id="update_dxcc_check"]', { timeout: 300000 })
-			.should("be.visible")
-			.and("have.class", "fa-check-circle");
-
-		cy.get('i[id="installer_lock_check"]', { timeout: 30000 })
-			.should("be.visible")
-			.and("have.class", "fa-check-circle");
+		waitForInstallStep("config_file", 30000);
+		waitForInstallStep("database_file", 30000);
+		waitForInstallStep("database_tables", 60000);
+		waitForInstallStep("database_migrations", 600000);
+		waitForInstallStep("update_dxcc", 300000);
+		waitForInstallStep("installer_lock", 60000);
 
 		// Check the browser language
 		cy.setCookie('language', 'english');
