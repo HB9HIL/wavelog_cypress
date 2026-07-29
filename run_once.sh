@@ -102,6 +102,12 @@ if [ -n "$PHP" ]; then
   sed -i "s|^FROM php:.*|FROM php:${PHP}-apache|" /tmp/wavelog-${CI_PIPELINE_ID}/Dockerfile
 fi
 
+# Point every clublog cty api download at Wavelog's own dxcc_data mirror
+# instead, so the installer's DXCC update does not hammer clublog.org on
+# every run. Patches the temp copy only, never the SOURCE checkout.
+find /tmp/wavelog-${CI_PIPELINE_ID} -type f -name '*.php' -exec sed -i -E \
+  's#https://cdn\.clublog\.org/cty\.php\?api=[A-Za-z0-9]*#https://github.com/wavelog/dxcc_data/raw/refs/heads/master/cty.xml.gz#g' {} +
+
 # ---------------------------------------------------------------------------
 # Static checks (all dockerized). Each is a function so it can run standalone
 # via ONLY=... or as part of the full run. Non-blocking in the full run: they
