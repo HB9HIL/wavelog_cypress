@@ -54,6 +54,18 @@ Cypress.expose('clubstation', {
     userlocator: "JN47RI"
 });
 
+// A second, ordinary account used by 16-api_v2_clubstation.cy.js as the *target*
+// of the club permission endpoints. The admin cannot be that target: the API
+// refuses to let an officer change their own membership, so granting and
+// revoking permissions needs somebody else. Created on demand by that spec.
+Cypress.expose('clubmember', {
+    username: "club.member",
+    password: "memberSafePa33word",
+    callsign: "HB9MEMB",
+    email: "member@example.com",
+    userlocator: "JN47RI"
+});
+
 
 // Force the English UI for every test. With testIsolation (default since
 // Cypress 12) all cookies are cleared before each test, so the language cookie

@@ -22,7 +22,7 @@ describe("API v2", () => {
 		"station:read", "station:write", "station:delete",
 		"radio:read", "radio:write", "radio:delete",
 		"statistic:read",
-		"lookup:read", "club:read",
+		"lookup:read", "club:read", "club:write", "club:delete",
 	];
 	// A read-only token: reads succeed, writes/deletes must be refused.
 	const READ_SCOPES = ["qso:read", "station:read", "radio:read", "statistic:read"];
@@ -236,7 +236,7 @@ describe("API v2", () => {
 			radio: ["GET", "POST", "DELETE"],
 			lookup: ["GET"],
 			statistic: ["GET"],
-			club: ["GET"],
+			club: ["GET", "POST", "PATCH", "DELETE"],
 			token: ["GET"],
 		};
 
@@ -266,7 +266,7 @@ describe("API v2", () => {
 		// Were the scope checked first, a POST to a read-only resource would answer
 		// "insufficient_scope: lookup:write" — a scope that is not in the registry
 		// and that no token can ever hold, hiding the real reason from the client.
-		["lookup", "statistic", "club", "token"].forEach((resource) => {
+		["lookup", "statistic", "token"].forEach((resource) => {
 			it(`POST /${resource} is 405, not 403 insufficient_scope`, () => {
 				cy.request({
 					method: "POST",
@@ -1937,20 +1937,72 @@ describe("API v2", () => {
 		});
 	});
 
-	// --- Club resource (club:read, read-only) ------------------------------
+	// --- Club resource (club:read/write/delete) ----------------------------
+	//
+	// Smoke tests only: the test user is an administrator, so this spec can
+	// reach the resource but never exercises the officer path or the writes.
+	// 16-api_v2_clubstation.cy.js owns that coverage, with a real clubstation.
 
 	describe("Club", () => {
-		it("GET /api/v2/club is refused for a non-officer/personal token (403)", () => {
-			// The test user's token is personal (owner == creator), so it is never a
-			// club officer and the endpoint refuses it.
+		it("GET /api/v2/club lists the clubstations for an administrator", () => {
+			// The token is personal (owner == creator), so there is no implicit
+			// clubstation. An administrator may name one with ?club_id=; without
+			// it they get the directory to pick that id from.
 			cy.request({
 				method: "GET",
 				url: `${API}/club`,
 				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.be.an("array");
+				response.body.data.forEach((club) => {
+					expect(club).to.have.property("club_id");
+					expect(club).to.have.property("callsign");
+					expect(club).to.have.property("member_count");
+					// The directory, not a member list.
+					expect(club).to.not.have.property("permission_level");
+				});
+			});
+		});
+
+		it("GET /api/v2/club?club_id= refuses a club_id that is not numeric (400)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/club?club_id=abc`,
+				headers: auth(fullKey),
 				failOnStatusCode: false,
 			}).then((response) => {
-				expect(response.status).to.eq(403);
-				expect(response.body.error).to.have.property("code", "forbidden");
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("GET /api/v2/club?club_id= refuses a user that is not a clubstation (404)", () => {
+			// user_id 1 is the administrator running this spec, not a clubstation.
+			cy.request({
+				method: "GET",
+				url: `${API}/club?club_id=1`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+
+		it("POST /api/v2/club needs a club_id from an administrator (400)", () => {
+			// Only GET falls back to the directory; every other verb has to name
+			// the club it acts on.
+			cy.request({
+				method: "POST",
+				url: `${API}/club`,
+				headers: auth(fullKey),
+				body: { user_id: 2, permission_level: 3 },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+				expect(response.body.error.details).to.have.property("field", "club_id");
 			});
 		});
 	});

@@ -36,7 +36,7 @@ describe("API v2 - Clubstation permissions", () => {
 		"station:read", "station:write", "station:delete",
 		"radio:read", "radio:write", "radio:delete",
 		"statistic:read",
-		"lookup:read", "club:read",
+		"lookup:read", "club:read", "club:write", "club:delete",
 	];
 
 	// Permission levels, named for readability (see controllers/Club.php).
@@ -49,8 +49,12 @@ describe("API v2 - Clubstation permissions", () => {
 	const OTHER_OPERATOR = "HB9OTHER";
 
 	let clubToken;      // club token: user_id = clubstation, created_by = admin
+	let clubReadToken;  // same, but with club:read only (scope enforcement)
+	let personalToken;  // the admin's own token: user_id == created_by
+	let adminClubToken; // the admin's own token, with the club scopes
 	let clubId;         // user_id of the clubstation account
 	let adminId;        // user_id of the admin (the acting member)
+	let memberId;       // user_id of a second account, the target of the club writes
 	let clubStationId;  // station location owned by the clubstation
 	let ownQsoId;       // QSO logged by the admin as the club
 	let foreignQsoId;   // QSO in the same log, but COL_OPERATOR = OTHER_OPERATOR
@@ -61,6 +65,19 @@ describe("API v2 - Clubstation permissions", () => {
 	// 13-clubstation.cy.js, same mechanism).
 	function openUserMenu(callsign) {
 		cy.contains('a.nav-link.dropdown-toggle', callsign).realHover();
+	}
+
+	// cy.login() is hard-wired to the admin, and the session set up by the
+	// beforeEach hook is still active, so this logs out first. Used for the
+	// cases that need somebody other than the admin in front of the UI.
+	function loginAs(username, password) {
+		cy.visit("/index.php/user/logout");
+		cy.url({ timeout: 15000 }).should("include", "/user/login");
+
+		cy.get('input[name="user_name"]').type(username);
+		cy.get('input[name="user_password"]').type(password);
+		cy.get('button[type="submit"]').click();
+		cy.url().should("include", "/dashboard");
 	}
 
 	// The first dashboard load as the clubstation may AJAX-open the "Version
@@ -129,6 +146,67 @@ describe("API v2 - Clubstation permissions", () => {
 		});
 	}
 
+	// Resolve a user_id through the endpoint the club permission UI uses.
+	// Yields null when no such account exists.
+	function findUserId(callsign) {
+		return cy.request({
+			method: "POST",
+			url: "/index.php/club/get_users",
+			form: true,
+			body: { query: callsign },
+		}).then((res) => {
+			const list = typeof res.body === "string" ? JSON.parse(res.body) : res.body;
+			const user = list.find((u) => u.user_callsign === callsign);
+			return user ? Number(user.user_id) : null;
+		});
+	}
+
+	// The club write endpoints need a target that is neither the clubstation nor
+	// the acting officer — the API refuses both. The admin is the officer here,
+	// so a second ordinary account is created for that role. Idempotent, so the
+	// spec survives a re-run against an instance that already has it.
+	function ensureClubMemberAccount() {
+		const env_member = Cypress.expose('clubmember');
+
+		return findUserId(env_member.callsign).then((id) => {
+			if (id !== null) {
+				memberId = id;
+				return;
+			}
+
+			cy.visit("/index.php/user/add");
+			cy.get('input[name="user_name"]').type(env_member.username);
+			cy.get('input[name="user_password"]').type(env_member.password);
+			cy.get('input[name="user_callsign"]').type(env_member.callsign);
+			cy.get('input[name="user_email"]').type(env_member.email);
+			cy.get('input[name="user_locator"]').type(env_member.userlocator);
+			// Operator, the lowest level config/auth_level offers (the other is
+			// 99). Enough to open /api and mint a token, which the scope
+			// visibility tests need, and decidedly not an administrator.
+			cy.get('select[name="user_type"]').select("3");
+			// Scope to the user form: the header also renders a submit button.
+			cy.get('form[name="users"] button[type="submit"]').click();
+
+			findUserId(env_member.callsign).then((created) => {
+				expect(created, "club member account created").to.not.be.null;
+				memberId = created;
+			});
+		});
+	}
+
+	// The permission suite starts from "not a member yet". A run that was cut
+	// short (cypress-fail-fast) can leave the membership behind, so drop it
+	// before the suite rather than depending on its own cleanup having run.
+	function clearMemberMembership() {
+		return cy.request({
+			method: "POST",
+			url: "/index.php/club/delete_member",
+			form: true,
+			body: { club_id: clubId, user_id: memberId },
+			failOnStatusCode: false,
+		});
+	}
+
 	before(() => {
 		const env_user = Cypress.expose('user');
 		const env_club = Cypress.expose('clubstation');
@@ -149,17 +227,13 @@ describe("API v2 - Clubstation permissions", () => {
 		});
 
 		// The admin's own user_id, via the endpoint the permissions UI uses.
-		cy.request({
-			method: "POST",
-			url: "/index.php/club/get_users",
-			form: true,
-			body: { query: env_user.callsign },
-		}).then((res) => {
-			const list = typeof res.body === "string" ? JSON.parse(res.body) : res.body;
-			const user = list.find((u) => u.user_callsign === env_user.callsign);
-			expect(user, "admin found via club/get_users").to.exist;
-			adminId = Number(user.user_id);
+		findUserId(env_user.callsign).then((id) => {
+			expect(id, "admin found via club/get_users").to.not.be.null;
+			adminId = id;
 		});
+
+		// The second account the club permission endpoints act on.
+		ensureClubMemberAccount();
 
 		// Mint the club token from inside the clubstation session, then leave it.
 		// 13-clubstation left the admin at level 9, which is what we need to set
@@ -168,8 +242,23 @@ describe("API v2 - Clubstation permissions", () => {
 			clubSwitch(env_user.callsign, env_club.callsign);
 			dismissVersionModal();
 			cy.createApiToken("cypress-v2-club", ALL_SCOPES).then((t) => (clubToken = t));
+			// A second club token, restricted to club:read. Minting it here is the
+			// only way to keep it a *club* token; from a normal admin session it
+			// would come out personal and fail the officer check instead of the
+			// scope check it is meant to prove.
+			cy.createApiToken("cypress-v2-club-readonly", ["club:read"]).then((t) => (clubReadToken = t));
 			cy.visit("/index.php/dashboard");
 			stopImpersonate(env_club.callsign);
+
+			// Back in the plain admin session, so these come out personal
+			// (user_id == created_by). Losing the club membership must not touch
+			// them; the revocation suite at the end asserts that.
+			cy.createApiToken("cypress-v2-personal", ["station:read"]).then((t) => (personalToken = t));
+			// A personal token that carries the club scopes: only an
+			// administrator is offered them outside a clubstation, and only they
+			// can use them - by naming the club with ?club_id=.
+			cy.createApiToken("cypress-v2-admin-club", ["club:read", "club:write", "club:delete"])
+				.then((t) => (adminClubToken = t));
 		});
 	});
 
@@ -589,6 +678,31 @@ describe("API v2 - Clubstation permissions", () => {
 					]);
 				});
 			});
+
+			// Handing out permissions is the officer's job; a member holding
+			// club:write must not be able to promote themselves or anybody else.
+			// The token carries the scope here, so a pass would be a real
+			// privilege escalation, not just a missing scope.
+			it("may not read, grant or revoke club permissions (403)", () => {
+				[
+					{ method: "GET", url: `${API}/club/${adminId}` },
+					{ method: "POST", url: `${API}/club`, body: { user_id: memberId, permission_level: OFFICER } },
+					{ method: "PATCH", url: `${API}/club/${memberId}`, body: { permission_level: OFFICER } },
+					{ method: "DELETE", url: `${API}/club/${adminId}` },
+				].forEach((request) => {
+					cy.request({
+						...request,
+						headers: auth(),
+						failOnStatusCode: false,
+					}).then((response) => {
+						expect(response.status, `${request.method} ${request.url}`).to.eq(403);
+						expect(response.body.error.code).to.be.oneOf([
+							"insufficient_club_permission",
+							"forbidden",
+						]);
+					});
+				});
+			});
 		});
 	});
 
@@ -652,70 +766,586 @@ describe("API v2 - Clubstation permissions", () => {
 		});
 	});
 
-	// --- Membership revoked ------------------------------------------------
+	// --- Managing club permissions (officer) -------------------------------
 	//
-	// The token carries no record of the membership, so it has to be re-checked
-	// on every request. Without that, removing a member from the club would
-	// leave them full access until the token happens to expire — and the UI
-	// offers "never" as an expiry.
+	// The clubstation is implicit — it is the token owner — so the path id
+	// addresses the *member*: /club/{user_id}. The acting officer is the admin,
+	// so every write here targets the separate member account: the API refuses
+	// to let an officer touch their own membership, which is what keeps a club
+	// from being locked out of its own permission management.
 
-	describe("Membership revoked", () => {
+	describe("Club permissions", () => {
 		before(() => {
 			cy.login();
-			removeClubMembership();
+			clearMemberMembership();
 		});
 
-		[
-			"/token",
-			"/qso",
-			"/station",
-			"/radio",
-			"/statistic",
-			"/club",
-			"/lookup?callsign=V2CLUBOWN",
-		].forEach((path) => {
-			it(`GET ${path} is refused with club_access_revoked`, () => {
-				cy.request({
-					url: `${API}${path}`,
-					headers: auth(),
-					failOnStatusCode: false,
-				}).then((response) => {
-					expect(response.status).to.eq(403);
-					expect(response.body.error).to.have.property("code", "club_access_revoked");
-				});
+		beforeEach(() => {
+			setClubLevel(OFFICER);
+		});
+
+		it("reads a single member", () => {
+			cy.request({ url: `${API}/club/${adminId}`, headers: auth() }).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.user_id).to.eq(adminId);
+				expect(response.body.data.permission_level).to.eq(OFFICER);
 			});
 		});
 
-		it("a write is refused as well", () => {
+		it("reports a non-member as not found", () => {
+			cy.request({
+				url: `${API}/club/${memberId}`,
+				headers: auth(),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+
+		it("adds a member", () => {
 			cy.request({
 				method: "POST",
-				url: `${API}/qso`,
+				url: `${API}/club`,
 				headers: auth(),
-				body: {
-					station_profile_id: clubStationId,
-					call: "V2REVOKED",
-					band: "20m",
-					mode: "SSB",
-					qso_date: "2024-02-04",
-					time_on: "1400",
-				},
+				body: { user_id: memberId, permission_level: MEMBER },
+			}).then((response) => {
+				expect(response.status).to.eq(201);
+				expect(response.headers).to.have.property("location");
+				expect(response.headers.location).to.contain(`/club/${memberId}`);
+				expect(response.body.data.user_id).to.eq(memberId);
+				expect(response.body.data.permission_level).to.eq(MEMBER);
+				// No notify flag was sent, so the meta stays silent about mail.
+				expect(response.body.meta).to.not.have.property("notified");
+			});
+		});
+
+		it("the new member shows up in the list", () => {
+			cy.request({ url: `${API}/club`, headers: auth() }).then((response) => {
+				const ids = response.body.data.map((m) => m.user_id);
+				expect(ids).to.include(memberId);
+			});
+		});
+
+		// POST creates, it never overwrites: silently changing a level a client
+		// believed it was setting for the first time is the worse failure mode.
+		it("refuses to add the same member twice (409)", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/club`,
+				headers: auth(),
+				body: { user_id: memberId, permission_level: OFFICER },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(409);
+				expect(response.body.error).to.have.property("code", "conflict");
+			});
+		});
+
+		it("changes the member's level", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/club/${memberId}`,
+				headers: auth(),
+				body: { permission_level: MEMBER_ADIF },
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.permission_level).to.eq(MEMBER_ADIF);
+			});
+		});
+
+		// The mail needs working email settings, which the test instance does not
+		// have. What is under test is the contract: the permission is granted
+		// either way and the outcome is reported instead of failing the request.
+		it("reports the notification outcome without failing on it", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/club/${memberId}`,
+				headers: auth(),
+				body: { permission_level: MEMBER, notify: true },
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.permission_level).to.eq(MEMBER);
+				expect(response.body.meta).to.have.property("notified");
+				expect(response.body.meta.notified).to.be.a("boolean");
+			});
+		});
+
+		it("refuses a level outside 3/6/9 (400)", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/club/${memberId}`,
+				headers: auth(),
+				body: { permission_level: 5 },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+				expect(response.body.error.details.allowed).to.have.members([MEMBER, MEMBER_ADIF, OFFICER]);
+			});
+		});
+
+		it("refuses a POST without a user_id (400)", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/club`,
+				headers: auth(),
+				body: { permission_level: MEMBER },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		// An officer demoting or removing themselves over the API would lock the
+		// club out of its own permission management.
+		it("refuses to touch the officer's own membership (403)", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/club/${adminId}`,
+				headers: auth(),
+				body: { permission_level: MEMBER },
 				failOnStatusCode: false,
 			}).then((response) => {
 				expect(response.status).to.eq(403);
-				expect(response.body.error).to.have.property("code", "club_access_revoked");
+				expect(response.body.error).to.have.property("code", "forbidden");
+			});
+
+			cy.request({
+				method: "DELETE",
+				url: `${API}/club/${adminId}`,
+				headers: auth(),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(403);
+				expect(response.body.error).to.have.property("code", "forbidden");
+			});
+
+			// Still an officer afterwards.
+			cy.request({ url: `${API}/club/${adminId}`, headers: auth() }).then((response) => {
+				expect(response.body.data.permission_level).to.eq(OFFICER);
 			});
 		});
 
-		it("re-adding the member restores access immediately", () => {
-			// No caching: the level is read per request.
-			setClubLevel(OFFICER);
-			cy.request({ url: `${API}/token`, headers: auth() }).then((response) => {
+		it("refuses the clubstation itself as a member (400)", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/club`,
+				headers: auth(),
+				body: { user_id: clubId, permission_level: MEMBER },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("refuses an unknown user (404)", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/club/999999`,
+				headers: auth(),
+				body: { permission_level: MEMBER },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+
+		// Wavelog has no PUT anywhere; the Allow header must advertise only what
+		// the resource actually implements.
+		it("has no PUT (405)", () => {
+			cy.request({
+				method: "PUT",
+				url: `${API}/club/${memberId}`,
+				headers: auth(),
+				body: { permission_level: MEMBER },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(405);
+				expect(response.headers.allow).to.contain("PATCH");
+				expect(response.headers.allow).to.not.contain("PUT");
+			});
+		});
+
+		it("removes the member", () => {
+			cy.request({
+				method: "DELETE",
+				url: `${API}/club/${memberId}`,
+				headers: auth(),
+			}).then((response) => {
+				expect(response.status).to.eq(204);
+			});
+
+			cy.request({
+				url: `${API}/club/${memberId}`,
+				headers: auth(),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+			});
+		});
+
+		// Without this a DELETE on a non-member would report success, and a PATCH
+		// would quietly create the membership POST is meant to create.
+		it("refuses to change or remove a non-member (404)", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/club/${memberId}`,
+				headers: auth(),
+				body: { permission_level: OFFICER },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+			});
+
+			cy.request({
+				method: "DELETE",
+				url: `${API}/club/${memberId}`,
+				headers: auth(),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+			});
+		});
+
+		// Reading the list needs club:read, writing club:write and removing
+		// club:delete. The read-only token is an officer's token too (minted in
+		// the same clubstation session), so what it fails on is the scope alone.
+		it("needs the matching scope per verb", () => {
+			const readAuth = { Authorization: "Bearer " + clubReadToken };
+
+			cy.request({ url: `${API}/club`, headers: readAuth }).then((response) => {
 				expect(response.status).to.eq(200);
+			});
+
+			cy.request({
+				method: "POST",
+				url: `${API}/club`,
+				headers: readAuth,
+				body: { user_id: memberId, permission_level: MEMBER },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(403);
+				expect(response.body.error).to.have.property("code", "insufficient_scope");
+				expect(response.body.error.details).to.have.property("required_scope", "club:write");
+			});
+
+			cy.request({
+				method: "DELETE",
+				url: `${API}/club/${adminId}`,
+				headers: readAuth,
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(403);
+				expect(response.body.error.details).to.have.property("required_scope", "club:delete");
+			});
+		});
+
+		// The clubstation is implicit for a club token, so ?club_id= is at most
+		// a restatement of it. Naming a different club must not silently work on
+		// the token's own one.
+		it("accepts its own club_id and refuses a foreign one", () => {
+			cy.request({
+				url: `${API}/club?club_id=${clubId}`,
+				headers: auth(),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+			});
+
+			cy.request({
+				url: `${API}/club?club_id=${adminId}`,
+				headers: auth(),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(403);
+				expect(response.body.error).to.have.property("code", "forbidden");
 			});
 		});
 	});
 
+	// --- The administrator path --------------------------------------------
+	//
+	// An administrator manages every clubstation in the web UI, so the API lets
+	// them too - but with a personal token there is no implicit club, and
+	// ?club_id= becomes mandatory. Their own membership is not protected the way
+	// an officer's is: they cannot lock themselves out, since the web UI always
+	// gets them back in.
+
+	describe("Club permissions as an administrator", () => {
+		const adminAuth = () => ({ Authorization: "Bearer " + adminClubToken });
+
+		beforeEach(() => {
+			setClubLevel(OFFICER);
+		});
+
+		// The one call that does not need club_id: it is where club_id comes
+		// from. Refusing it would leave an administrator nowhere to look up the
+		// id every other call requires.
+		it("lists the clubstations when no club is named", () => {
+			cy.request({
+				url: `${API}/club`,
+				headers: adminAuth(),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				const club = response.body.data.find((c) => c.club_id === clubId);
+				expect(club, "the clubstation is listed").to.exist;
+				expect(club.callsign).to.eq(Cypress.expose('clubstation').callsign);
+				// The admin is a member, so the count is at least one.
+				expect(club.member_count).to.be.at.least(1);
+				// A directory entry, not the member shape.
+				expect(club).to.not.have.property("permission_level");
+			});
+		});
+
+		// A club_id that was supplied but is unusable must not fall back to the
+		// directory - that would hide the typo.
+		it("refuses a malformed club_id (400)", () => {
+			cy.request({
+				url: `${API}/club?club_id=notanumber`,
+				headers: adminAuth(),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+				expect(response.body.error.details).to.have.property("field", "club_id");
+			});
+		});
+
+		it("still refuses to guess the club on a single member (400)", () => {
+			cy.request({
+				url: `${API}/club/${adminId}`,
+				headers: adminAuth(),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+				expect(response.body.error.details).to.have.property("field", "club_id");
+			});
+		});
+
+		it("lists the members of the club it names", () => {
+			cy.request({
+				url: `${API}/club?club_id=${clubId}`,
+				headers: adminAuth(),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				const ids = response.body.data.map((m) => m.user_id);
+				expect(ids).to.include(adminId);
+			});
+		});
+
+		// A user id that is not a clubstation is not a club, whatever else it is.
+		it("refuses a club_id that is not a clubstation (404)", () => {
+			cy.request({
+				url: `${API}/club?club_id=${adminId}`,
+				headers: adminAuth(),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+
+		it("adds, changes and removes a member", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/club?club_id=${clubId}`,
+				headers: adminAuth(),
+				body: { user_id: memberId, permission_level: MEMBER },
+			}).then((response) => {
+				expect(response.status).to.eq(201);
+				expect(response.body.data.permission_level).to.eq(MEMBER);
+			});
+
+			cy.request({
+				method: "PATCH",
+				url: `${API}/club/${memberId}?club_id=${clubId}`,
+				headers: adminAuth(),
+				body: { permission_level: OFFICER },
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.permission_level).to.eq(OFFICER);
+			});
+
+			cy.request({
+				method: "DELETE",
+				url: `${API}/club/${memberId}?club_id=${clubId}`,
+				headers: adminAuth(),
+			}).then((response) => {
+				expect(response.status).to.eq(204);
+			});
+		});
+
+		it("still needs club_id on a write (400)", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/club`,
+				headers: adminAuth(),
+				body: { user_id: memberId, permission_level: MEMBER },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error.details).to.have.property("field", "club_id");
+			});
+		});
+
+		// The counterpart of the officer's 403: the rule exists to stop a club
+		// locking itself out, which cannot happen to an administrator.
+		it("may change its own membership, unlike an officer", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/club/${adminId}?club_id=${clubId}`,
+				headers: adminAuth(),
+				body: { permission_level: MEMBER },
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.permission_level).to.eq(MEMBER);
+			});
+
+			// Put it back through the same path, so the suite leaves an officer
+			// behind even if the beforeEach hook is ever dropped.
+			cy.request({
+				method: "PATCH",
+				url: `${API}/club/${adminId}?club_id=${clubId}`,
+				headers: adminAuth(),
+				body: { permission_level: OFFICER },
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+			});
+		});
+
+		// Same guards as for an officer, minus the self-service rule.
+		it("keeps the remaining guard rails", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/club?club_id=${clubId}`,
+				headers: adminAuth(),
+				body: { user_id: clubId, permission_level: MEMBER },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+			});
+
+			cy.request({
+				method: "PATCH",
+				url: `${API}/club/999999?club_id=${clubId}`,
+				headers: adminAuth(),
+				body: { permission_level: MEMBER },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+			});
+		});
+
+		// A club token has exactly one club, so it never sees the directory -
+		// GET /club stays its own member list.
+		it("a club token gets members, not the clubstation list", () => {
+			cy.request({ url: `${API}/club`, headers: auth() }).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data[0]).to.have.property("permission_level");
+				expect(response.body.data[0]).to.not.have.property("member_count");
+			});
+		});
+
+		// A personal token without administrator rights is turned away by the
+		// same check, whether or not it names a club - including on the
+		// directory call, which must not leak which clubstations exist.
+		it("a regular user's personal token is refused (403)", () => {
+			const env_member = Cypress.expose('clubmember');
+
+			// Minted from the member's own session, so it is personal and its
+			// owner is not an administrator. The club scopes are not offered in
+			// that dialog, which is why they are requested directly.
+			loginAs(env_member.username, env_member.password);
+			cy.createApiToken("cypress-v2-member-personal", ["station:read"]).then((memberToken) => {
+				const memberAuth = { Authorization: "Bearer " + memberToken };
+
+				[`${API}/club`, `${API}/club?club_id=${clubId}`].forEach((url) => {
+					cy.request({ url, headers: memberAuth, failOnStatusCode: false }).then((response) => {
+						// Without club:read the scope check fires first; either
+						// way the request never reaches the club data.
+						expect(response.status).to.eq(403);
+						expect(response.body.error.code).to.be.oneOf(["forbidden", "insufficient_scope"]);
+					});
+				});
+			});
+		});
+	});
+
+	// --- Scope visibility in the token dialog -------------------------------
+	//
+	// A scope that can only ever answer 403 has no business in the dialog, so
+	// the club group is only rendered for the two roles that can use it. The
+	// checkboxes are the contract: same source as the validation in
+	// Api_token::generate().
+
+	describe("Club scopes in the token dialog", () => {
+		const clubCheckbox = 'input[name="scopes[]"][value="club:read"]';
+
+		it("are offered to an administrator", () => {
+			cy.login();
+			cy.visit("/index.php/api");
+			cy.get(clubCheckbox).should("exist");
+		});
+
+		it("are not offered to a regular user", () => {
+			const env_member = Cypress.expose('clubmember');
+
+			loginAs(env_member.username, env_member.password);
+			cy.visit("/index.php/api");
+			// The dialog itself is there, only the club group is missing.
+			cy.get('input[name="scopes[]"]').should("exist");
+			cy.get(clubCheckbox).should("not.exist");
+		});
+
+		it("are offered inside a clubstation to an officer", () => {
+			const env_user = Cypress.expose('user');
+			const env_club = Cypress.expose('clubstation');
+
+			cy.login();
+			setClubLevel(OFFICER);
+			clubSwitch(env_user.callsign, env_club.callsign);
+			dismissVersionModal();
+
+			cy.visit("/index.php/api");
+			cy.get(clubCheckbox).should("exist");
+
+			cy.visit("/index.php/dashboard");
+			stopImpersonate(env_club.callsign);
+		});
+
+		// The level travels in the session (cd_p_level), filled from
+		// available_clubstations at switch time - so the level has to be set
+		// before the login that precedes the switch, not after.
+		it("are not offered inside a clubstation below officer level", () => {
+			const env_user = Cypress.expose('user');
+			const env_club = Cypress.expose('clubstation');
+
+			cy.login();
+			setClubLevel(MEMBER);
+			loginAs(env_user.username, env_user.password);
+
+			clubSwitch(env_user.callsign, env_club.callsign);
+			dismissVersionModal();
+
+			cy.visit("/index.php/api");
+			cy.get('input[name="scopes[]"]').should("exist");
+			cy.get(clubCheckbox).should("not.exist");
+
+			cy.visit("/index.php/dashboard");
+			stopImpersonate(env_club.callsign);
+			setClubLevel(OFFICER);
+		});
+	});
+
 	// --- Cleanup -----------------------------------------------------------
+	//
+	// Runs before the revocation suite on purpose: removing the membership takes
+	// the club token with it, and everything below is torn down through exactly
+	// that token.
 
 	describe("Cleanup", () => {
 		it("removes the QSOs and the station location created here", () => {
@@ -742,8 +1372,138 @@ describe("API v2 - Clubstation permissions", () => {
 			});
 		});
 
-		it("leaves the admin as Club Officer for the specs that follow", () => {
+		it("leaves the club with only the admin as officer", () => {
 			setClubLevel(OFFICER);
+
+			// The "Club permissions" suite ends with the member removed, but a
+			// failed run may leave the membership behind.
+			cy.request({
+				method: "DELETE",
+				url: `${API}/club/${memberId}`,
+				headers: auth(),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect([204, 404]).to.include(response.status);
+			});
+		});
+	});
+
+	// --- Membership revoked ------------------------------------------------
+	//
+	// Removing a member takes their club tokens with it, the same cleanup the v1
+	// keys have always had (Club_model::delete_member()). The token is gone, so
+	// the API answers 401 invalid_token rather than refusing an existing token —
+	// and re-adding the member does not bring it back.
+	//
+	// The per-request membership check (Api_v2::resolve_club_context(), error
+	// code club_access_revoked) still guards everything that ends a membership
+	// without going through delete_member(): direct database work, migrations,
+	// future code paths. Nothing reachable from a browser session can trigger it
+	// any more, and the suite has no SQL access, so it is deliberately not
+	// covered here — adding a database dependency just to exercise a safety net
+	// would cost more than it proves.
+	//
+	// Last suite in the file: it destroys the club token everything above needs.
+
+	describe("Membership revoked", () => {
+		before(() => {
+			cy.login();
+			removeClubMembership();
+		});
+
+		[
+			"/token",
+			"/qso",
+			"/station",
+			"/radio",
+			"/statistic",
+			"/club",
+			"/lookup?callsign=V2CLUBOWN",
+		].forEach((path) => {
+			it(`GET ${path} is refused with invalid_token`, () => {
+				cy.request({
+					url: `${API}${path}`,
+					headers: auth(),
+					failOnStatusCode: false,
+				}).then((response) => {
+					expect(response.status).to.eq(401);
+					expect(response.body.error).to.have.property("code", "invalid_token");
+				});
+			});
+		});
+
+		it("a write is refused as well", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/qso`,
+				headers: auth(),
+				body: {
+					station_profile_id: clubStationId,
+					call: "V2REVOKED",
+					band: "20m",
+					mode: "SSB",
+					qso_date: "2024-02-04",
+					time_on: "1400",
+				},
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(401);
+				expect(response.body.error).to.have.property("code", "invalid_token");
+			});
+		});
+
+		// A removed officer must not be able to grant themselves back in.
+		it("granting permissions is refused as well", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/club`,
+				headers: auth(),
+				body: { user_id: memberId, permission_level: OFFICER },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(401);
+				expect(response.body.error).to.have.property("code", "invalid_token");
+			});
+		});
+
+		// The read-only club token was issued by the same member, so it goes with
+		// the membership too — the cleanup is per member, not per token.
+		it("every club token of that member is gone, not just the one in use", () => {
+			cy.request({
+				url: `${API}/club`,
+				headers: { Authorization: "Bearer " + clubReadToken },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(401);
+				expect(response.body.error).to.have.property("code", "invalid_token");
+			});
+		});
+
+		// The permission comes back, the token does not: it was deleted, and
+		// nothing recreates it.
+		it("re-adding the member does not revive the token", () => {
+			setClubLevel(OFFICER);
+			cy.request({
+				url: `${API}/token`,
+				headers: auth(),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(401);
+				expect(response.body.error).to.have.property("code", "invalid_token");
+			});
+		});
+
+		// A personal token of the same user is a different thing entirely: it is
+		// owned by them rather than by the club, so no membership change touches
+		// it. Minted before the removal, which is what makes this an assertion
+		// about survival rather than about minting a fresh one.
+		it("their personal token is untouched", () => {
+			cy.request({
+				url: `${API}/station`,
+				headers: { Authorization: "Bearer " + personalToken },
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+			});
 		});
 	});
 });
