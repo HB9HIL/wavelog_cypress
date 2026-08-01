@@ -899,31 +899,63 @@ describe("API v2 - Clubstation permissions", () => {
 		});
 
 		// An officer demoting or removing themselves over the API would lock the
-		// club out of its own permission management.
-		it("refuses to touch the officer's own membership (403)", () => {
+		// club out of its own permission management. The rule binds officers
+		// only, and the fixture's officer is the Wavelog administrator - who is
+		// exempt - so this needs a club token created by an ordinary member.
+		// The preceding test left that member at officer level, which is both
+		// what the rule protects and what the club switch needs.
+		it("refuses to touch a plain officer's own membership (403)", () => {
+			const env_member = Cypress.expose('clubmember');
+			const env_club = Cypress.expose('clubstation');
+
+			loginAs(env_member.username, env_member.password);
+			clubSwitch(env_member.callsign, env_club.callsign);
+			dismissVersionModal();
+
+			cy.createApiToken("cypress-v2-member-club", ["club:read", "club:write", "club:delete"])
+				.then((memberClubToken) => {
+					const memberAuth = { Authorization: "Bearer " + memberClubToken };
+
+					cy.request({
+						method: "PATCH",
+						url: `${API}/club/${memberId}`,
+						headers: memberAuth,
+						body: { permission_level: MEMBER },
+						failOnStatusCode: false,
+					}).then((response) => {
+						expect(response.status).to.eq(403);
+						expect(response.body.error).to.have.property("code", "forbidden");
+					});
+
+					cy.request({
+						method: "DELETE",
+						url: `${API}/club/${memberId}`,
+						headers: memberAuth,
+						failOnStatusCode: false,
+					}).then((response) => {
+						expect(response.status).to.eq(403);
+						expect(response.body.error).to.have.property("code", "forbidden");
+					});
+
+					// Still an officer afterwards.
+					cy.request({ url: `${API}/club/${memberId}`, headers: memberAuth }).then((response) => {
+						expect(response.body.data.permission_level).to.eq(OFFICER);
+					});
+				});
+		});
+
+		// The other side of that rule: an administrator is never locked out of
+		// the web UI, so it would only get in their way. Their club token walks
+		// straight through the check the member above is stopped by. Set to the
+		// level it already holds, so the assertion costs the fixture nothing.
+		it("lets an administrator's club token touch their own membership", () => {
 			cy.request({
 				method: "PATCH",
 				url: `${API}/club/${adminId}`,
 				headers: auth(),
-				body: { permission_level: MEMBER },
-				failOnStatusCode: false,
+				body: { permission_level: OFFICER },
 			}).then((response) => {
-				expect(response.status).to.eq(403);
-				expect(response.body.error).to.have.property("code", "forbidden");
-			});
-
-			cy.request({
-				method: "DELETE",
-				url: `${API}/club/${adminId}`,
-				headers: auth(),
-				failOnStatusCode: false,
-			}).then((response) => {
-				expect(response.status).to.eq(403);
-				expect(response.body.error).to.have.property("code", "forbidden");
-			});
-
-			// Still an officer afterwards.
-			cy.request({ url: `${API}/club/${adminId}`, headers: auth() }).then((response) => {
+				expect(response.status).to.eq(200);
 				expect(response.body.data.permission_level).to.eq(OFFICER);
 			});
 		});
