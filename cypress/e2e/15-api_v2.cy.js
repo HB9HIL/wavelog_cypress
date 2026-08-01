@@ -508,6 +508,75 @@ describe("API v2", () => {
 			});
 		});
 
+		it("GET /api/v2/qso?qso_since=&qso_until= filters on the QSO date", () => {
+			// The QSO created above is dated 2024-01-02. A window of exactly that one
+			// day must contain it, which also proves both bounds are inclusive.
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?qso_since=2024-01-02&qso_until=2024-01-02&per_page=5000`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.map((qso) => qso.call)).to.include("V2API1");
+				response.body.data.forEach((qso) =>
+					expect(qso.qso_date.slice(0, 10)).to.eq("2024-01-02")
+				);
+			});
+		});
+
+		it("GET /api/v2/qso?qso_until= excludes anything logged later", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?qso_until=2024-01-01&per_page=5000`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.map((qso) => qso.call)).to.not.include("V2API1");
+				response.body.data.forEach((qso) =>
+					expect(qso.qso_date.slice(0, 10)).to.be.at.most("2024-01-01")
+				);
+			});
+		});
+
+		it("GET /api/v2/qso?qso_since= excludes anything logged earlier", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?callsign=V2API1&qso_since=2024-01-03`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				// The date filter narrows the callsign filter, it does not replace it.
+				expect(response.body.data).to.have.length(0);
+				expect(response.body.meta.total).to.eq(0);
+			});
+		});
+
+		it("GET /api/v2/qso with a malformed date returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?qso_since=02.01.2024`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+				expect(response.body.error.details).to.have.property("format", "YYYY-MM-DD");
+			});
+		});
+
+		it("GET /api/v2/qso with a non-existent date returns 400", () => {
+			// Well-formed but impossible: the parser must not roll it over to March.
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?qso_until=2024-02-31`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
 		it("GET /api/v2/qso/{id} returns the single QSO", () => {
 			cy.request({
 				method: "GET",
@@ -1101,6 +1170,41 @@ describe("API v2", () => {
 			});
 		});
 
+		it("GET /api/v2/statistic?profile=confirmations&qso_until= can only lower the counts", () => {
+			// Everything in the test log predates this, so an old ceiling must leave
+			// nothing but the empty-result shape.
+			cy.request({
+				method: "GET",
+				url: `${API}/statistic?profile=confirmations&qso_until=1999-12-31`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				const c = response.body.data.confirmations;
+				expect(c.filters.qso_until).to.eq("1999-12-31");
+				expect(c.counts.qsos).to.eq(0);
+				expect(c.by_band).to.have.length(0);
+				expect(c.by_mode).to.have.length(0);
+			});
+		});
+
+		it("GET /api/v2/statistic?profile=confirmations&qso_since=&qso_until= bracket the QSO date", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/statistic?profile=confirmations&qso_since=1999-01-01&qso_until=2099-12-31`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				const c = response.body.data.confirmations;
+				expect(c.filters.qso_since).to.eq("1999-01-01");
+				expect(c.filters.qso_until).to.eq("2099-12-31");
+				// A window spanning the whole log neither drops nor invents QSOs.
+				expect(c.counts.qsos).to.eq(confirmationTotals.qsos);
+				CONFIRMATION_TYPES.forEach((type) => {
+					expect(c.counts[type], type).to.eq(confirmationTotals[type]);
+				});
+			});
+		});
+
 		it("GET /api/v2/statistic?profile=confirmations&band=&mode= filters without erroring", () => {
 			cy.request({
 				method: "GET",
@@ -1160,7 +1264,7 @@ describe("API v2", () => {
 		it("GET /api/v2/statistic?profile=confirmations with a malformed date returns 400", () => {
 			// 2026-02-31 is well-formed but not a real date; it must not roll over
 			// into March.
-			["since=notadate", "since=2026-02-31", "qso_since=notadate"].forEach((query) => {
+			["since=notadate", "since=2026-02-31", "qso_since=notadate", "qso_until=2026-02-31"].forEach((query) => {
 				cy.request({
 					method: "GET",
 					url: `${API}/statistic?profile=confirmations&${query}`,
