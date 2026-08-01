@@ -104,6 +104,26 @@ describe("API v2 - Clubstation permissions", () => {
 		cy.get('#clubswitchModal button[type="submit"]').click();
 	}
 
+	// Enter the clubstation as somebody who may just have logged in for the very
+	// first time. That login is met by the first login wizard, which is
+	// backdrop-static, so the header menu clubSwitch() reaches for is behind an
+	// overlay that cannot be clicked away - but the wizard offers the club
+	// switch itself ("Skip and Open Clubstation"). On a re-run the account is no
+	// longer new, the wizard never appears and the header path is the only one.
+	function enterClubstation(userCallsign, clubCallsign) {
+		cy.wait(2000);
+		cy.get("body").then(($body) => {
+			if ($body.find("#firstLoginWizardModal.show").length) {
+				cy.get("#firstLoginWizardModal").contains("a", clubCallsign).click();
+				cy.get("#clubswitchModal", { timeout: 8000 }).should("be.visible");
+				cy.get('#clubswitchModal button[type="submit"]').click();
+			} else {
+				dismissVersionModal();
+				clubSwitch(userCallsign, clubCallsign);
+			}
+		});
+	}
+
 	function stopImpersonate(clubCallsign) {
 		openUserMenu(clubCallsign);
 		cy.get('button.dropdown-item[onclick*="stopImpersonate_modal"]').click();
@@ -784,11 +804,26 @@ describe("API v2 - Clubstation permissions", () => {
 			setClubLevel(OFFICER);
 		});
 
+		// The full member object. config.php can cut this down to the callsign
+		// and the name (api_minimal_userdata), which the test image does not do
+		// - asserting the whole set here is what would catch that default
+		// flipping, since the option cannot be toggled mid-run.
 		it("reads a single member", () => {
 			cy.request({ url: `${API}/club/${adminId}`, headers: auth() }).then((response) => {
 				expect(response.status).to.eq(200);
 				expect(response.body.data.user_id).to.eq(adminId);
 				expect(response.body.data.permission_level).to.eq(OFFICER);
+				expect(Object.keys(response.body.data).sort()).to.deep.eq([
+					"callsign",
+					"permission_level",
+					"user_email",
+					"user_firstname",
+					"user_id",
+					"user_language",
+					"user_lastname",
+					"user_locator",
+					"user_name",
+				]);
 			});
 		});
 
@@ -901,16 +936,27 @@ describe("API v2 - Clubstation permissions", () => {
 		// An officer demoting or removing themselves over the API would lock the
 		// club out of its own permission management. The rule binds officers
 		// only, and the fixture's officer is the Wavelog administrator - who is
-		// exempt - so this needs a club token created by an ordinary member.
-		// The preceding test left that member at officer level, which is both
-		// what the rule protects and what the club switch needs.
+		// exempt - so this needs a club token created by an ordinary member at
+		// officer level. The preceding tests left that member at level 3, and
+		// handing out club scopes needs officer level too
+		// (Club_resource::is_grantable()). cd_p_level is filled from
+		// available_clubstations at login time, so the promotion has to happen
+		// before the login, not after the club switch.
 		it("refuses to touch a plain officer's own membership (403)", () => {
 			const env_member = Cypress.expose('clubmember');
 			const env_club = Cypress.expose('clubstation');
 
+			cy.request({
+				method: "PATCH",
+				url: `${API}/club/${memberId}`,
+				headers: auth(),
+				body: { permission_level: OFFICER },
+			}).then((response) => {
+				expect(response.status, "promote the member to officer").to.eq(200);
+			});
+
 			loginAs(env_member.username, env_member.password);
-			clubSwitch(env_member.callsign, env_club.callsign);
-			dismissVersionModal();
+			enterClubstation(env_member.callsign, env_club.callsign);
 
 			cy.createApiToken("cypress-v2-member-club", ["club:read", "club:write", "club:delete"])
 				.then((memberClubToken) => {
@@ -1318,7 +1364,8 @@ describe("API v2 - Clubstation permissions", () => {
 		const clubCheckbox = 'input[name="scopes[]"][value="club:read"]';
 
 		it("are offered to an administrator", () => {
-			cy.login();
+			// The beforeEach hook already logged the admin in; cy.login() insists
+			// on the login form, so a second one would fail on the dashboard.
 			cy.visit("/index.php/api");
 			cy.get(clubCheckbox).should("exist");
 		});
@@ -1337,8 +1384,10 @@ describe("API v2 - Clubstation permissions", () => {
 			const env_user = Cypress.expose('user');
 			const env_club = Cypress.expose('clubstation');
 
-			cy.login();
+			// Same order as below: the level first, then the login that fills
+			// available_clubstations, then the switch.
 			setClubLevel(OFFICER);
+			loginAs(env_user.username, env_user.password);
 			clubSwitch(env_user.callsign, env_club.callsign);
 			dismissVersionModal();
 
@@ -1356,7 +1405,6 @@ describe("API v2 - Clubstation permissions", () => {
 			const env_user = Cypress.expose('user');
 			const env_club = Cypress.expose('clubstation');
 
-			cy.login();
 			setClubLevel(MEMBER);
 			loginAs(env_user.username, env_user.password);
 
