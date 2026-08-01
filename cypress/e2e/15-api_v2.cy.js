@@ -433,6 +433,81 @@ describe("API v2", () => {
 			});
 		});
 
+		it("GET /api/v2/qso?callsign= filters by the worked callsign", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?callsign=V2API1`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.be.an("array").and.have.length.greaterThan(0);
+				response.body.data.forEach((qso) => expect(qso.call).to.eq("V2API1"));
+				// `total` counts the filtered set, not the whole logbook.
+				expect(response.body.meta.total).to.eq(response.body.data.length);
+			});
+		});
+
+		it("GET /api/v2/qso?callsign= matches case-insensitively", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?callsign=v2api1`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.have.length.greaterThan(0);
+				response.body.data.forEach((qso) => expect(qso.call).to.eq("V2API1"));
+			});
+		});
+
+		it("GET /api/v2/qso?callsign= of an unworked callsign returns an empty page", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?callsign=XX0NOTWORKED`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.be.an("array").and.have.length(0);
+				expect(response.body.meta.total).to.eq(0);
+			});
+		});
+
+		it("GET /api/v2/qso?callsign= combines with the other filters", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?callsign=V2API1&band=40m`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				// The QSO is on 20m, so the band filter must exclude it.
+				expect(response.body.data).to.have.length(0);
+				expect(response.body.meta.total).to.eq(0);
+			});
+		});
+
+		it("GET /api/v2/qso?callsign= with a malformed callsign returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?callsign=${encodeURIComponent("V2API1, W1AW")}`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("GET /api/v2/qso?callsign= accepts a slashed portable callsign", () => {
+			// Portable calls are legal input even when nothing matches.
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?callsign=${encodeURIComponent("HB9HIL/P")}`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.be.an("array");
+			});
+		});
+
 		it("GET /api/v2/qso/{id} returns the single QSO", () => {
 			cy.request({
 				method: "GET",
@@ -1045,6 +1120,29 @@ describe("API v2", () => {
 			});
 		});
 
+		it("GET /api/v2/statistic?profile=confirmations keeps its grouping under a filter", () => {
+			// The confirmation counts are built from the same WHERE builder as the
+			// QSO list, but with a different argument list. A parameter shifted by
+			// one there would silently reinterpret the filters and drop the group
+			// key, so assert both the echoed filter and the grouping shape.
+			cy.request({
+				method: "GET",
+				url: `${API}/statistic?profile=confirmations&band=20m`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				const c = response.body.data.confirmations;
+				expect(c.filters.band).to.eq("20m");
+				expect(c.by_band).to.be.an("array");
+				expect(c.by_mode).to.be.an("array");
+				c.by_band.forEach((row) => {
+					expect(row).to.have.property("band");
+					expect(String(row.band).toLowerCase()).to.eq("20m");
+				});
+				c.by_mode.forEach((row) => expect(row).to.have.property("mode"));
+			});
+		});
+
 		it("GET /api/v2/statistic?profile=confirmations&type=hrdlog returns 400", () => {
 			// HRDLog is upload-only in Wavelog, so it is not a confirmation type.
 			cy.request({
@@ -1194,6 +1292,24 @@ describe("API v2", () => {
 				// ADIF shares the list's pagination meta.
 				expect(response.body.meta).to.have.property("total");
 				expect(response.body.meta).to.have.property("has_more");
+			});
+		});
+
+		it("GET /api/v2/qso?callsign=&format=adif narrows the export", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/qso?format=adif&callsign=${ADIF_CALL}&station_id=${STATION_PROFILE_ID}`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				const adif = response.body.data.adif;
+				expect(adif).to.be.a("string").and.to.include(ADIF_CALL);
+				// Every exported record is that callsign - the filter applies to the
+				// ADIF rendering exactly as it does to the JSON list.
+				const calls = [...adif.matchAll(/<call:\d+>([^<]+)/gi)].map((m) => m[1].trim().toUpperCase());
+				expect(calls).to.have.length.greaterThan(0);
+				calls.forEach((call) => expect(call).to.eq(ADIF_CALL));
+				expect(response.body.data.exported).to.eq(calls.length);
 			});
 		});
 
