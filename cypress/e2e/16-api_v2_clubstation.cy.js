@@ -805,7 +805,7 @@ describe("API v2 - Clubstation permissions", () => {
 		});
 
 		// The full member object. config.php can cut this down to the callsign
-		// and the name (api_minimal_userdata), which the test image does not do
+		// and the name (apiv2_hide_userdata), which the test image does not do
 		// - asserting the whole set here is what would catch that default
 		// flipping, since the option cannot be toggled mid-run.
 		it("reads a single member", () => {
