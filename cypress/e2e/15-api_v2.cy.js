@@ -532,9 +532,12 @@ describe("API v2", () => {
 			}).then((response) => {
 				expect(response.status).to.eq(200);
 				expect(response.body.data.map((qso) => qso.call)).to.not.include("V2API1");
-				response.body.data.forEach((qso) =>
-					expect(qso.qso_date.slice(0, 10)).to.be.at.most("2024-01-01")
-				);
+				// ISO dates compare lexicographically, so a plain string compare is
+				// enough - chai's at.most() would only take a number or a Date.
+				response.body.data.forEach((qso) => {
+					const date = qso.qso_date.slice(0, 10);
+					expect(date <= "2024-01-01", date).to.eq(true);
+				});
 			});
 		});
 
