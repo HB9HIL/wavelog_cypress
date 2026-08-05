@@ -23,6 +23,7 @@ describe("API v2", () => {
 		"radio:read", "radio:write", "radio:delete",
 		"statistic:read",
 		"lookup:read", "club:read", "club:write", "club:delete",
+		"confirmation:read",
 	];
 	// A read-only token: reads succeed, writes/deletes must be refused.
 	const READ_SCOPES = ["qso:read", "station:read", "radio:read", "statistic:read"];
@@ -238,6 +239,7 @@ describe("API v2", () => {
 			statistic: ["GET"],
 			club: ["GET", "POST", "PATCH", "DELETE"],
 			token: ["GET"],
+			confirmation: ["GET"],
 		};
 
 		Object.entries(ALLOW_BY_RESOURCE).forEach(([resource, verbs]) => {
@@ -266,7 +268,7 @@ describe("API v2", () => {
 		// Were the scope checked first, a POST to a read-only resource would answer
 		// "insufficient_scope: lookup:write" — a scope that is not in the registry
 		// and that no token can ever hold, hiding the real reason from the client.
-		["lookup", "statistic", "token"].forEach((resource) => {
+		["lookup", "statistic", "token", "confirmation"].forEach((resource) => {
 			it(`POST /${resource} is 405, not 403 insufficient_scope`, () => {
 				cy.request({
 					method: "POST",
@@ -1323,6 +1325,154 @@ describe("API v2", () => {
 				expect(response.status).to.eq(405);
 				expect(response.body.error).to.have.property("code", "method_not_allowed");
 				expect(response.headers.allow).to.eq("GET");
+			});
+		});
+	});
+
+	// --- Confirmation resource (confirmation:read, read-only) --------------
+	//
+	// One row per (QSO, confirmation-type) pair - the API counterpart to the
+	// web UI's Confirmations page. Distinct from ?profile=confirmations above,
+	// which only returns aggregate counts. Filter/validation logic is shared
+	// with that profile, so this mirrors its test style.
+
+	describe("Confirmations", () => {
+		const CONFIRMATION_TYPES = ["lotw", "eqsl", "qsl", "qrz", "clublog"];
+
+		it("GET /api/v2/confirmation returns the QSL confirmations list", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/confirmation`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expectCommonMeta(response, "confirmation", "GET");
+
+				expect(response.body.data).to.be.an("array");
+				response.body.data.forEach((row) => {
+					expect(row).to.include.all.keys(
+						"qso_id", "callsign", "qso_date", "mode", "band", "confirmation_date", "type"
+					);
+					expect(CONFIRMATION_TYPES).to.include(row.type);
+				});
+
+				expect(response.body.meta).to.include.all.keys(
+					"page", "per_page", "count", "total", "total_pages", "has_more"
+				);
+				expect(response.body.meta.per_page).to.eq(100);
+				expect(response.body.meta.filters.type).to.deep.eq(CONFIRMATION_TYPES);
+			});
+		});
+
+		it("GET /api/v2/confirmation?type=lotw,eqsl narrows to the requested types", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/confirmation?type=lotw,eqsl`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta.filters.type).to.deep.eq(["lotw", "eqsl"]);
+				response.body.data.forEach((row) => {
+					expect(["lotw", "eqsl"]).to.include(row.type);
+				});
+			});
+		});
+
+		it("GET /api/v2/confirmation?band=&mode= filters without erroring", () => {
+			// Same WHERE builder as the statistic profile; a shifted parameter
+			// there would silently reinterpret the filters, so assert both the
+			// echoed filter and that any returned rows actually match it.
+			cy.request({
+				method: "GET",
+				url: `${API}/confirmation?band=20m&mode=FT8`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta.filters.band).to.eq("20m");
+				expect(response.body.meta.filters.mode).to.eq("FT8");
+				response.body.data.forEach((row) => {
+					expect(row.band).to.eq("20m");
+				});
+			});
+		});
+
+		it("GET /api/v2/confirmation?qso_since=&qso_until= bracket the QSO date without erroring", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/confirmation?qso_since=1999-01-01&qso_until=2099-12-31`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.meta.filters.qso_since).to.eq("1999-01-01");
+				expect(response.body.meta.filters.qso_until).to.eq("2099-12-31");
+			});
+		});
+
+		it("GET /api/v2/confirmation?type=hrdlog returns 400", () => {
+			// HRDLog is upload-only in Wavelog, so it is not a confirmation type.
+			cy.request({
+				method: "GET",
+				url: `${API}/confirmation?type=hrdlog`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+				expect(response.body.error.details.allowed).to.include("lotw");
+			});
+		});
+
+		it("GET /api/v2/confirmation with a malformed date returns 400", () => {
+			// 2026-02-31 is well-formed but not a real date; it must not roll over.
+			["since=notadate", "since=2026-02-31", "qso_since=notadate", "qso_until=2026-02-31"].forEach((query) => {
+				cy.request({
+					method: "GET",
+					url: `${API}/confirmation?${query}`,
+					headers: auth(fullKey),
+					failOnStatusCode: false,
+				}).then((response) => {
+					expect(response.status, query).to.eq(400);
+					expect(response.body.error).to.have.property("code", "validation_error");
+					expect(response.body.error.details).to.have.property("format", "YYYY-MM-DD");
+				});
+			});
+		});
+
+		it("GET /api/v2/confirmation/1 has no addressable items (404)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/confirmation/1`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+
+		it("POST /api/v2/confirmation is refused: the resource is read-only (405)", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/confirmation`,
+				headers: auth(fullKey),
+				body: {},
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(405);
+				expect(response.body.error).to.have.property("code", "method_not_allowed");
+				expect(response.headers.allow).to.eq("GET");
+			});
+		});
+
+		it("is refused for a token without confirmation:read (403)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/confirmation`,
+				headers: auth(roKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(403);
+				expect(response.body.error).to.have.property("code", "insufficient_scope");
 			});
 		});
 	});
