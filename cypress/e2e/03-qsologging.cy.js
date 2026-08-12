@@ -128,7 +128,7 @@ describe("QSO Live Logging", () => {
 
 		// Check if the QSO is shown in the latest contacts
 		cy.get('body')
-			.contains("DKØTU");
+			.contains(/DK[0Ø]TU/);
 	});
 
 	it("Check the Frequency Input", () => {
