@@ -1065,7 +1065,22 @@ describe("API v2", () => {
 				expect(Number(qso.total)).to.be.a("number");
 				expect(qso.activity).to.have.all.keys("today", "month", "year");
 				expect(qso.breakdown).to.have.all.keys("by_band", "by_mode");
-				expect(qso.dxcc).to.have.all.keys("worked", "confirmed", "available");
+				expect(qso.dxcc).to.have.all.keys(
+					"worked",
+					"confirmed",
+					"confirmed_paper",
+					"confirmed_lotw",
+					"available",
+					"deleted",
+				);
+				expect(qso.dxcc.deleted).to.have.all.keys(
+					"worked",
+					"confirmed_paper",
+					"confirmed_lotw",
+				);
+				// paper/LoTW are a split of confirmed, overlap allowed
+				expect(qso.dxcc.confirmed_paper).to.be.at.most(qso.dxcc.confirmed);
+				expect(qso.dxcc.confirmed_lotw).to.be.at.most(qso.dxcc.confirmed);
 			});
 		});
 
