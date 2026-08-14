@@ -37,7 +37,13 @@ describe("API v2 - Clubstation permissions", () => {
 		"radio:read", "radio:write", "radio:delete",
 		"statistic:read",
 		"lookup:read", "club:read", "club:write", "club:delete",
+		"contest:read", "contest:write", "contest:delete",
 	];
+
+	// A contest catalog entry seeded by the installer; the full contest
+	// contract lives in 17-api_v2_contest.cy.js, here it is only the vehicle
+	// for the permission rules.
+	const CONTEST = "070-PSKFEST";
 
 	// Permission levels, named for readability (see controllers/Club.php).
 	const MEMBER = 3;
@@ -58,6 +64,7 @@ describe("API v2 - Clubstation permissions", () => {
 	let clubStationId;  // station location owned by the clubstation
 	let ownQsoId;       // QSO logged by the admin as the club
 	let foreignQsoId;   // QSO in the same log, but COL_OPERATOR = OTHER_OPERATOR
+	let contestSessionId; // contest session of the club, created by the officer
 
 	const auth = () => ({ Authorization: "Bearer " + clubToken });
 
@@ -370,6 +377,28 @@ describe("API v2 - Clubstation permissions", () => {
 			});
 		});
 
+		// A contest session is club-wide infrastructure like a station location:
+		// the web UI only lets an officer create one (clubaccess_check(9) in
+		// Contesting.php), and the API mirrors that.
+		it("an officer may create a contest session for the club", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/contest`,
+				headers: auth(),
+				body: {
+					contest: CONTEST,
+					time_start: "2024-02-01 10:00",
+					time_end: "2024-02-01 18:00",
+					station_id: clubStationId,
+					comment: "Cypress club contest",
+				},
+			}).then((response) => {
+				expect(response.status).to.eq(201);
+				contestSessionId = response.body.data.id;
+				expect(contestSessionId).to.be.a("number");
+			});
+		});
+
 		it("an officer sees both QSOs", () => {
 			cy.request({
 				url: `${API}/qso?station_id=${clubStationId}`,
@@ -604,6 +633,102 @@ describe("API v2 - Clubstation permissions", () => {
 				});
 			});
 
+			// A contest session belongs to the whole club, so creating, editing and
+			// deleting one stays with the officer - same rule as for a station
+			// location.
+			it("may not create a contest session (403)", () => {
+				cy.request({
+					method: "POST",
+					url: `${API}/contest`,
+					headers: auth(),
+					body: {
+						contest: CONTEST,
+						time_start: "2024-02-05 10:00",
+						time_end: "2024-02-05 18:00",
+						station_id: clubStationId,
+					},
+					failOnStatusCode: false,
+				}).then((response) => {
+					expect(response.status).to.eq(403);
+					expect(response.body.error).to.have.property("code", "insufficient_club_permission");
+					expect(response.body.error.details).to.have.property("required_level", 9);
+					expect(response.body.error.details).to.have.property("granted_level", level);
+				});
+			});
+
+			it("may not edit or delete a contest session (403)", () => {
+				cy.request({
+					method: "PATCH",
+					url: `${API}/contest/${contestSessionId}`,
+					headers: auth(),
+					body: { comment: "Hijacked" },
+					failOnStatusCode: false,
+				}).then((response) => {
+					expect(response.status).to.eq(403);
+					expect(response.body.error).to.have.property("code", "insufficient_club_permission");
+				});
+
+				cy.request({
+					method: "DELETE",
+					url: `${API}/contest/${contestSessionId}`,
+					headers: auth(),
+					failOnStatusCode: false,
+				}).then((response) => {
+					expect(response.status).to.eq(403);
+					expect(response.body.error).to.have.property("code", "insufficient_club_permission");
+				});
+			});
+
+			// Attaching a QSO to a session is not session editing: the advanced
+			// logbook lets a member do that for their own QSOs
+			// (clubaccess_check(3, $qsoID)), and the API has to match - otherwise a
+			// member could log the contest but not file it.
+			it("may attach and detach its own QSO", () => {
+				cy.request({
+					method: "PATCH",
+					url: `${API}/contest/${contestSessionId}`,
+					headers: auth(),
+					body: { link_qso_ids: [ownQsoId] },
+				}).then((response) => {
+					expect(response.status).to.eq(200);
+					expect(response.body.data.linked).to.eq(1);
+				});
+
+				// Detached again, so the second pass of this loop starts from the
+				// same state.
+				cy.request({
+					method: "PATCH",
+					url: `${API}/contest/${contestSessionId}`,
+					headers: auth(),
+					body: { unlink_qso_ids: [ownQsoId] },
+				}).then((response) => {
+					expect(response.body.data.unlinked).to.eq(1);
+				});
+			});
+
+			// The QSO belongs to another operator, so it is none of this member's
+			// business - not even to file it into a session they may otherwise use.
+			it("cannot attach another operator's QSO (403)", () => {
+				cy.request({
+					method: "PATCH",
+					url: `${API}/contest/${contestSessionId}`,
+					headers: auth(),
+					body: { link_qso_ids: [foreignQsoId] },
+					failOnStatusCode: false,
+				}).then((response) => {
+					expect(response.status).to.eq(403);
+					expect(response.body.error).to.have.property("code", "forbidden");
+					expect(response.body.error.details.qso_ids).to.include(foreignQsoId);
+				});
+
+				cy.request({
+					url: `${API}/contest/${contestSessionId}`,
+					headers: auth(),
+				}).then((response) => {
+					expect(response.body.data.qso_ids).to.not.include(foreignQsoId);
+				});
+			});
+
 			// A lookup answers "have I worked this before" out of the same logbook,
 			// so without the same restriction it would hand back the name, QTH and
 			// locator of exactly the QSO the list hides.
@@ -775,6 +900,19 @@ describe("API v2 - Clubstation permissions", () => {
 			}).then((response) => {
 				expect(response.status).to.eq(200);
 				expect(response.body.data.city).to.eq("Officer City");
+			});
+		});
+
+		it("may edit the contest session and attach any operator's QSO", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/contest/${contestSessionId}`,
+				headers: auth(),
+				body: { comment: "Officer comment", link_qso_ids: [foreignQsoId] },
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.comment).to.eq("Officer comment");
+				expect(response.body.data.linked).to.eq(1);
 			});
 		});
 
@@ -1428,7 +1566,16 @@ describe("API v2 - Clubstation permissions", () => {
 	// that token.
 
 	describe("Cleanup", () => {
-		it("removes the QSOs and the station location created here", () => {
+		it("removes the QSOs, the contest session and the station location created here", () => {
+			// The session first: deleting it leaves the QSOs in the log, which the
+			// next step removes on its own terms.
+			cy.request({
+				method: "DELETE",
+				url: `${API}/contest/${contestSessionId}`,
+				headers: auth(),
+				failOnStatusCode: false,
+			});
+
 			// Deleting the location would take its QSOs with it, but removing them
 			// explicitly keeps the failure modes apart if one of the two breaks.
 			[ownQsoId, foreignQsoId].forEach((id) => {
