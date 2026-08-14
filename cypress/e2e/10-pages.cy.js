@@ -24,7 +24,7 @@ const pages = [
 	{ name: "DX Calendar", url: "dxcalendar" },
 	{ name: "Contest Calendar", url: "contestcalendar" },
 	{ name: "Satellite", url: "satellite" },
-	{ name: "Satellite Timers", url: "sattimers" },
+	// { name: "Satellite Timers", url: "sattimers" }, // was removed in wavelog pr #3668
 	{ name: "Hamsat", url: "hamsat" },
 	{ name: "QSO Map", url: "map/qso_map" },
 	// Logging views
