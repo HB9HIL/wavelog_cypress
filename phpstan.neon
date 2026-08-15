@@ -64,7 +64,7 @@ parameters:
         # CI's front controller (index.php) defines these path/env constants at
         # runtime before any class loads. PHPStan analyses files in isolation and
         # never sees index.php, so it flags them as unknown. Harmless.
-        - '#Constant (APPPATH|BASEPATH|FCPATH|VIEWPATH|SELFPATH|ENVIRONMENT|SELF|EXT|CI_VERSION|SYSDIR) not found#'
+        - '#Constant (APPPATH|BASEPATH|FCPATH|VIEWPATH|SELFPATH|ENVIRONMENT|MAINTENANCE_MODE|SELF|EXT|CI_VERSION|SYSDIR) not found#'
         # Redundant defensive checks: isset()/empty()/?? on a variable PHPStan can
         # prove always exists. Not bugs, just superfluous guards -- filtered so the
         # gate stays focused on real "used before assigned" issues. The inverse
