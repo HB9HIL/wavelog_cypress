@@ -11,6 +11,7 @@ Everything is configured via environment variables:
   DATABASE  DB image to test against (e.g. mysql:8.4, mariadb:11.4)
             Default: mariadb:11.8
   PHP       PHP version to pin (e.g. 8.3); empty keeps the Dockerfile's default
+            8.6 resolves to the 8.6.0beta1 pre-release image
   BROWSER   Cypress browser to run (chromium, chrome, edge, electron); firefox
             unsupported. Must be installed on your machine. Default: chromium
   REPO      Wavelog repo to pull (ignored when SOURCE is set)
@@ -98,14 +99,20 @@ fi
 # Optionally pin a PHP version by patching the downloaded Dockerfile.
 # Empty PHP (default) leaves the Dockerfile untouched.
 if [ -n "$PHP" ]; then
-  echo "Pinning PHP ${PHP}"
-  sed -i "s|^FROM php:.*|FROM php:${PHP}-apache|" /tmp/wavelog-${CI_PIPELINE_ID}/Dockerfile
+  # 8.6 has no stable tag yet, so map it to the current pre-release image.
+  case "$PHP" in
+    8.6) PHP_TAG="8.6.0beta1-apache-trixie" ;;
+    *)   PHP_TAG="${PHP}-apache-trixie" ;;
+  esac
+  echo "Pinning PHP ${PHP_TAG}"
+  # perl instead of sed -i: BSD sed (macOS) needs an argument for -i, GNU sed must not get one.
+  perl -pi -e "s|^FROM php:.*|FROM php:${PHP_TAG}|" /tmp/wavelog-${CI_PIPELINE_ID}/Dockerfile
 fi
 
 # Point every clublog cty api download at Wavelog's own dxcc_data mirror
 # instead, so the installer's DXCC update does not hammer clublog.org on
 # every run. Patches the temp copy only, never the SOURCE checkout.
-find /tmp/wavelog-${CI_PIPELINE_ID} -type f -name '*.php' -exec sed -i -E \
+find /tmp/wavelog-${CI_PIPELINE_ID} -type f -name '*.php' -exec perl -pi -e \
   's#https://cdn\.clublog\.org/cty\.php\?api=[A-Za-z0-9]*#https://github.com/wavelog/dxcc_data/raw/refs/heads/master/cty.xml.gz#g' {} +
 
 # ---------------------------------------------------------------------------
