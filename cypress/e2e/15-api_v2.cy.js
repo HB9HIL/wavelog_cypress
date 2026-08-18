@@ -21,6 +21,7 @@ describe("API v2", () => {
 		"qso:read", "qso:write", "qso:delete",
 		"station:read", "station:write", "station:delete",
 		"radio:read", "radio:write", "radio:delete",
+		"logbook:read", "logbook:write", "logbook:delete",
 		"statistic:read",
 		"lookup:read", "club:read", "club:write", "club:delete",
 		"confirmation:read",
@@ -234,9 +235,11 @@ describe("API v2", () => {
 		const ALLOW_BY_RESOURCE = {
 			qso: ["GET", "POST", "PATCH", "DELETE"],
 			station: ["GET", "POST", "PATCH", "DELETE"],
+			logbook: ["GET", "POST", "PATCH", "DELETE"],
 			radio: ["GET", "POST", "DELETE"],
 			lookup: ["GET"],
 			statistic: ["GET"],
+			catalog: ["GET"],
 			club: ["GET", "POST", "PATCH", "DELETE"],
 			token: ["GET"],
 			confirmation: ["GET"],
@@ -268,7 +271,7 @@ describe("API v2", () => {
 		// Were the scope checked first, a POST to a read-only resource would answer
 		// "insufficient_scope: lookup:write" — a scope that is not in the registry
 		// and that no token can ever hold, hiding the real reason from the client.
-		["lookup", "statistic", "token", "confirmation"].forEach((resource) => {
+		["lookup", "statistic", "token", "confirmation", "catalog"].forEach((resource) => {
 			it(`POST /${resource} is 405, not 403 insufficient_scope`, () => {
 				cy.request({
 					method: "POST",
@@ -871,6 +874,106 @@ describe("API v2", () => {
 			});
 		});
 
+		// `country` is the DXCC entity name behind the station's dxcc number. It
+		// used to depend on the endpoint - only the list joined the entity table -
+		// so the same location came back with or without a country depending on
+		// how it was fetched. Every answer carries it now.
+		it("every station response carries the DXCC country", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/station`,
+				headers: auth(fullKey),
+			}).then((list) => {
+				const fromList = list.body.data.find((s) => s.id === stationId);
+				expect(fromList, "the created station is in the list").to.exist;
+				expect(fromList.country, "country in the list").to.be.a("string").and.not.be.empty;
+
+				cy.request({
+					method: "GET",
+					url: `${API}/station/${stationId}`,
+					headers: auth(fullKey),
+				}).then((single) => {
+					expect(single.body.data.country, "country in the single view").to.eq(fromList.country);
+				});
+			});
+		});
+
+		// Which location is the active one is switched with set_active, and that
+		// is deliberately a different key from the read-only `active` in the
+		// response - see the round-trip test below.
+		it("PATCH /api/v2/station/{id} switches the active location with set_active", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/station/${stationId}`,
+				headers: auth(fullKey),
+				body: { set_active: true },
+			})
+				.then((response) => {
+					expect(response.status).to.eq(200);
+					expect(response.body.data.active).to.eq(true);
+
+					return cy.request({
+						method: "GET",
+						url: `${API}/station/${STATION_PROFILE_ID}`,
+						headers: auth(fullKey),
+					});
+				})
+				.then((previous) => {
+					expect(previous.body.data.active, "the previously active location").to.eq(false);
+
+					// Restore the installer default: the delete tests below expect
+					// station 1 to be the active one.
+					return cy.request({
+						method: "PATCH",
+						url: `${API}/station/${STATION_PROFILE_ID}`,
+						headers: auth(fullKey),
+						body: { set_active: true },
+					});
+				})
+				.then((restored) => {
+					expect(restored.body.data.active).to.eq(true);
+				});
+		});
+
+		// The GET representation is symmetric with the writable fields, which is
+		// what lets a client duplicate or re-save a location by sending a GET
+		// result back. That only holds as long as the read-only `active` in that
+		// body is ignored on the way in.
+		it("PATCH /api/v2/station/{id} with a GET body does not reassign the active location", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/station/${stationId}`,
+				headers: auth(fullKey),
+			})
+				.then((current) => {
+					expect(current.body.data.active, "fixture: not the active location").to.eq(false);
+
+					return cy.request({
+						method: "PATCH",
+						url: `${API}/station/${stationId}`,
+						headers: auth(fullKey),
+						body: current.body.data,
+					});
+				})
+				.then((response) => {
+					expect(response.status).to.eq(200);
+					expect(response.body.data.active, "`active` is read-only on the way in").to.eq(false);
+				});
+		});
+
+		it("PATCH /api/v2/station/{id} rejects a non-scalar set_active (400)", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/station/${stationId}`,
+				headers: auth(fullKey),
+				body: { set_active: [1] },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
 		// DXCC, CQ and ITU end up in integer columns on every QSO logged from the
 		// location. Blanking one out would leave a location that looks fine but
 		// makes QSO creation fail, so PATCH refuses to clear it.
@@ -932,6 +1035,369 @@ describe("API v2", () => {
 			}).then((response) => {
 				expect(response.status).to.eq(404);
 				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+	});
+
+	// --- Logbooks resource (logbook:read / logbook:write / logbook:delete) --
+	//
+	// A logbook groups station locations: QSOs belong to a location, and the
+	// logbook decides which locations are displayed together. The API is the
+	// counterpart of Stationsetup, which is officer-only inside a clubstation -
+	// that half of the contract lives in 16-api_v2_clubstation.cy.js.
+
+	describe("Logbooks", () => {
+		const LOGBOOK_NAME = "Cypress V2 Logbook";
+
+		let logbookId;        // the logbook created here
+		let defaultLogbookId; // the installer's logbook, active throughout
+
+		it("GET /api/v2/logbook lists the owner's logbooks", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/logbook`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.be.an("array").and.have.length.greaterThan(0);
+				expectCommonMeta(response, "logbook", "GET");
+
+				const active = response.body.data.filter((l) => l.active === true);
+				expect(active, "exactly one logbook is active").to.have.length(1);
+				defaultLogbookId = active[0].id;
+
+				response.body.data.forEach((logbook) => {
+					expect(logbook).to.have.all.keys("id", "name", "active", "station_ids");
+					expect(logbook.station_ids).to.be.an("array");
+				});
+			});
+		});
+
+		it("POST /api/v2/logbook creates a logbook (201 + Location)", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/logbook`,
+				headers: auth(fullKey),
+				body: { name: LOGBOOK_NAME, station_ids: [STATION_PROFILE_ID] },
+			}).then((response) => {
+				expect(response.status).to.eq(201);
+				expect(response.headers.location).to.include("/api/v2/logbook/");
+				expect(response.body.data.name).to.eq(LOGBOOK_NAME);
+				// The owner already has an active logbook, so the new one is not it.
+				expect(response.body.data.active).to.eq(false);
+				expect(response.body.data.station_ids).to.deep.eq([STATION_PROFILE_ID]);
+				logbookId = response.body.data.id;
+			});
+		});
+
+		it("GET /api/v2/logbook/{id} returns the single logbook", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/logbook/${logbookId}`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.id).to.eq(logbookId);
+				expect(response.body.data.name).to.eq(LOGBOOK_NAME);
+			});
+		});
+
+		it("POST /api/v2/logbook with an existing name returns 409", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/logbook`,
+				headers: auth(fullKey),
+				body: { name: LOGBOOK_NAME },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(409);
+				expect(response.body.error).to.have.property("code", "conflict");
+			});
+		});
+
+		it("POST /api/v2/logbook without a name returns 400", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/logbook`,
+				headers: auth(fullKey),
+				body: {},
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+				expect(response.body.error.details.missing).to.include("name");
+			});
+		});
+
+		it("PATCH /api/v2/logbook/{id} renames the logbook", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/logbook/${logbookId}`,
+				headers: auth(fullKey),
+				body: { name: `${LOGBOOK_NAME} Renamed` },
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.name).to.eq(`${LOGBOOK_NAME} Renamed`);
+			});
+		});
+
+		it("PATCH /api/v2/logbook/{id} renaming onto an existing name returns 409", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/logbook/${defaultLogbookId}`,
+				headers: auth(fullKey),
+			}).then((existing) => {
+				cy.request({
+					method: "PATCH",
+					url: `${API}/logbook/${logbookId}`,
+					headers: auth(fullKey),
+					body: { name: existing.body.data.name },
+					failOnStatusCode: false,
+				}).then((response) => {
+					expect(response.status).to.eq(409);
+					expect(response.body.error).to.have.property("code", "conflict");
+				});
+			});
+		});
+
+		// station_ids is a full replacement, not a delta: the list that comes out
+		// of a GET can be sent straight back in. Duplicates collapse, an empty
+		// array unlinks everything.
+		it("PATCH /api/v2/logbook/{id} replaces the linked locations and de-duplicates", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/logbook/${logbookId}`,
+				headers: auth(fullKey),
+				body: { station_ids: [STATION_PROFILE_ID, STATION_PROFILE_ID] },
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.station_ids).to.deep.eq([STATION_PROFILE_ID]);
+			});
+		});
+
+		it("PATCH /api/v2/logbook/{id} with an empty station_ids unlinks everything", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/logbook/${logbookId}`,
+				headers: auth(fullKey),
+				body: { station_ids: [] },
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.station_ids).to.deep.eq([]);
+			});
+		});
+
+		it("PATCH /api/v2/logbook/{id} with a station_ids that is not an array returns 400", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/logbook/${logbookId}`,
+				headers: auth(fullKey),
+				body: { station_ids: String(STATION_PROFILE_ID) },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		// Everything is validated before the first write, so a request that is
+		// refused half-way cannot leave the logbook renamed but unlinked.
+		it("PATCH /api/v2/logbook/{id} with a foreign station is refused without applying the rename", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/logbook/${logbookId}`,
+				headers: auth(fullKey),
+				body: { name: "Cypress V2 Must Not Stick", station_ids: [999999] },
+				failOnStatusCode: false,
+			})
+				.then((response) => {
+					expect(response.status).to.eq(403);
+					expect(response.body.error).to.have.property("code", "forbidden");
+
+					return cy.request({
+						method: "GET",
+						url: `${API}/logbook/${logbookId}`,
+						headers: auth(fullKey),
+					});
+				})
+				.then((unchanged) => {
+					expect(unchanged.body.data.name, "the rename was not applied").to.eq(`${LOGBOOK_NAME} Renamed`);
+				});
+		});
+
+		it("PATCH /api/v2/logbook/{id} with nothing editable returns 400", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/logbook/${logbookId}`,
+				headers: auth(fullKey),
+				body: {},
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("PATCH /api/v2/logbook/{id} of an unknown logbook returns 404", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/logbook/999999`,
+				headers: auth(fullKey),
+				body: { name: "Cypress V2 Nowhere" },
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+
+		// Same split as the station locations: `active` is read-only in the
+		// response, switching happens through set_active, so a client can send a
+		// GET result back without moving the active logbook.
+		it("PATCH /api/v2/logbook/{id} switches the active logbook with set_active", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/logbook/${logbookId}`,
+				headers: auth(fullKey),
+				body: { set_active: true },
+			})
+				.then((response) => {
+					expect(response.status).to.eq(200);
+					expect(response.body.data.active).to.eq(true);
+
+					return cy.request({
+						method: "GET",
+						url: `${API}/logbook/${defaultLogbookId}`,
+						headers: auth(fullKey),
+					});
+				})
+				.then((previous) => {
+					expect(previous.body.data.active, "the previously active logbook").to.eq(false);
+
+					// Restore the installer default: everything logged after this
+					// spec expects it to be the active logbook.
+					return cy.request({
+						method: "PATCH",
+						url: `${API}/logbook/${defaultLogbookId}`,
+						headers: auth(fullKey),
+						body: { set_active: true },
+					});
+				})
+				.then((restored) => {
+					expect(restored.body.data.active).to.eq(true);
+				});
+		});
+
+		it("PATCH /api/v2/logbook/{id} with a GET body does not reassign the active logbook", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/logbook/${logbookId}`,
+				headers: auth(fullKey),
+			})
+				.then((current) => {
+					expect(current.body.data.active, "fixture: not the active logbook").to.eq(false);
+
+					return cy.request({
+						method: "PATCH",
+						url: `${API}/logbook/${logbookId}`,
+						headers: auth(fullKey),
+						body: current.body.data,
+					});
+				})
+				.then((response) => {
+					expect(response.status).to.eq(200);
+					expect(response.body.data.active, "`active` is read-only on the way in").to.eq(false);
+				});
+		});
+
+		// The active logbook is what everything else writes into, so it cannot be
+		// deleted. The web UI hides the button for it; the API says so out loud.
+		it("DELETE /api/v2/logbook/{id} of the active logbook returns 409", () => {
+			cy.request({
+				method: "DELETE",
+				url: `${API}/logbook/${defaultLogbookId}`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(409);
+				expect(response.body.error).to.have.property("code", "conflict");
+			});
+		});
+
+		it("DELETE /api/v2/logbook/{id} of a foreign logbook returns 404", () => {
+			cy.request({
+				method: "DELETE",
+				url: `${API}/logbook/999999`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+
+		// Deleting a logbook drops its links to the station locations, but only
+		// its own: the locations themselves and every other logbook that uses them
+		// stay untouched. QSOs belong to the location, not to the logbook.
+		it("DELETE /api/v2/logbook/{id} removes the logbook and only its own links (204)", () => {
+			cy.request({
+				method: "PATCH",
+				url: `${API}/logbook/${logbookId}`,
+				headers: auth(fullKey),
+				body: { station_ids: [STATION_PROFILE_ID] },
+			})
+				.then(() => {
+					return cy.request({
+						method: "DELETE",
+						url: `${API}/logbook/${logbookId}`,
+						headers: auth(fullKey),
+					});
+				})
+				.then((response) => {
+					expect(response.status).to.eq(204);
+
+					return cy.request({
+						method: "GET",
+						url: `${API}/logbook/${defaultLogbookId}`,
+						headers: auth(fullKey),
+					});
+				})
+				.then((survivor) => {
+					expect(survivor.body.data.station_ids, "the other logbook keeps its link")
+						.to.include(STATION_PROFILE_ID);
+
+					return cy.request({
+						method: "GET",
+						url: `${API}/station/${STATION_PROFILE_ID}`,
+						headers: auth(fullKey),
+					});
+				})
+				.then((station) => {
+					expect(station.status, "the station location survives").to.eq(200);
+				});
+		});
+
+		it("GET /api/v2/logbook/{id} of a deleted logbook returns 404", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/logbook/${logbookId}`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+
+		it("is refused for a token without logbook:read (403)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/logbook`,
+				headers: auth(roKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(403);
+				expect(response.body.error).to.have.property("code", "insufficient_scope");
 			});
 		});
 	});
@@ -2098,6 +2564,223 @@ describe("API v2", () => {
 			}).then((response) => {
 				expect(response.status).to.eq(403);
 				expect(response.body.error).to.have.property("code", "insufficient_scope");
+			});
+		});
+	});
+
+	// --- Catalog resource (no scope) ---------------------------------------
+	//
+	// Instance-wide reference data: the value lists a client needs to fill a
+	// dropdown or to validate its input before sending a write. It carries no
+	// user data at all, so any valid token may read it and it contributes no
+	// scope to the registry. ?topic= selects the list, and a request without one
+	// enumerates the topics so a client can discover them.
+
+	describe("Catalog", () => {
+		// Mexico is the deterministic fixture for the deprecated filter: ADIF 3.1.5
+		// retired the Distrito Federal (DF) in favour of Ciudad de México (CMX),
+		// and both rows live in primary_subdivisions (migration 231).
+		const MEXICO = 50;
+		const GERMANY = 230;
+
+		it("GET /api/v2/catalog enumerates the available topics", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/catalog`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data.topics).to.include.members(["contest", "dxcc", "subdivisions"]);
+				expectCommonMeta(response, "catalog", "GET");
+			});
+		});
+
+		it("GET /api/v2/catalog?topic=contest returns the contest catalog", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/catalog?topic=contest`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.be.an("array").and.have.length.greaterThan(0);
+				expect(response.body.meta).to.have.property("topic", "contest");
+				response.body.data.forEach((entry) => {
+					expect(entry).to.have.all.keys("id", "contest", "name");
+				});
+			});
+		});
+
+		it("GET /api/v2/catalog?topic=dxcc returns the current entities, sorted by name", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/catalog?topic=dxcc`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.be.an("array").and.have.length.greaterThan(300);
+				expect(response.body.meta).to.have.property("topic", "dxcc");
+
+				const first = response.body.data[0];
+				expect(first).to.have.all.keys("adif", "name", "prefix", "continent", "cqz", "ituz", "lat", "long");
+				expect(first.adif).to.be.a("number");
+
+				// Entries carrying punctuation ("ANTIGUA & BARBUDA") are left out of
+				// the comparison: where a "&" or a "/" sorts is a question of the
+				// database collation, not of the API contract. The remaining ~300
+				// plain names order identically under every collation.
+				const names = response.body.data.map((e) => e.name).filter((n) => /^[A-Z0-9 ]+$/.test(n));
+				expect(names, "sorted by name").to.deep.eq([...names].sort());
+
+				// Deleted entities are not offered: they are no longer a valid
+				// choice for anything a client creates.
+				expect(response.body.data.find((e) => e.adif === 0), "no placeholder entity").to.not.exist;
+			});
+		});
+
+		it("GET /api/v2/catalog?topic=dxcc&order=prefix sorts by prefix instead", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/catalog?topic=dxcc&order=prefix`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				// Same collation caveat as above: the slashed prefixes ("FO/A") are
+				// left out, the plain ones carry the assertion.
+				const prefixes = response.body.data.map((e) => e.prefix).filter((p) => /^[A-Z0-9]+$/.test(p));
+				expect(prefixes, "sorted by prefix").to.deep.eq([...prefixes].sort());
+			});
+		});
+
+		it("GET /api/v2/catalog?topic=dxcc&order=bogus returns 400 with the allowed values", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/catalog?topic=dxcc&order=bogus`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+				expect(response.body.error.details.allowed).to.deep.eq(["name", "prefix"]);
+			});
+		});
+
+		it("GET /api/v2/catalog?topic=bogus returns 400 with the allowed topics", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/catalog?topic=bogus`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+				expect(response.body.error.details.allowed).to.include.members(["contest", "dxcc", "subdivisions"]);
+			});
+		});
+
+		it("GET /api/v2/catalog?topic=subdivisions&dxcc= returns the entity's subdivisions", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/catalog?topic=subdivisions&dxcc=${GERMANY}`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.be.an("array").and.have.length.greaterThan(0);
+				expect(response.body.meta).to.have.property("topic", "subdivisions");
+				response.body.data.forEach((entry) => {
+					expect(entry).to.have.all.keys("state", "name");
+				});
+				// The value in "state" is what a QSO's STATE field expects.
+				expect(response.body.data.map((e) => e.state)).to.include("BY");
+			});
+		});
+
+		// Deprecated subdivisions stay in the database so an old QSO still shows
+		// the state it was logged with, but they are not a valid choice any more
+		// and must not reach a client filling a dropdown.
+		it("GET /api/v2/catalog?topic=subdivisions leaves the deprecated ones out", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/catalog?topic=subdivisions&dxcc=${MEXICO}`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				const states = response.body.data.map((e) => e.state);
+				expect(states, "the retired Distrito Federal").to.not.include("DF");
+				expect(states, "its current replacement").to.include("CMX");
+			});
+		});
+
+		it("GET /api/v2/catalog?topic=subdivisions without a dxcc returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/catalog?topic=subdivisions`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		it("GET /api/v2/catalog?topic=subdivisions&dxcc=abc returns 400", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/catalog?topic=subdivisions&dxcc=abc`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(400);
+				expect(response.body.error).to.have.property("code", "validation_error");
+			});
+		});
+
+		// An entity nobody has subdivisions for is an empty list, not an error:
+		// the topic is a filter over reference data, not an addressable item.
+		it("GET /api/v2/catalog?topic=subdivisions of an unknown entity returns an empty list", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/catalog?topic=subdivisions&dxcc=999999`,
+				headers: auth(fullKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.deep.eq([]);
+			});
+		});
+
+		it("GET /api/v2/catalog/1 has no addressable items (404)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/catalog/1`,
+				headers: auth(fullKey),
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(404);
+				expect(response.body.error).to.have.property("code", "not_found");
+			});
+		});
+
+		// The point of a scope-less resource: a token that may do nothing but read
+		// QSOs still gets the value lists it needs to talk to the write endpoints.
+		it("needs no particular scope (a read-only token works)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/catalog?topic=dxcc`,
+				headers: auth(roKey),
+			}).then((response) => {
+				expect(response.status).to.eq(200);
+				expect(response.body.data).to.be.an("array").and.have.length.greaterThan(0);
+			});
+		});
+
+		// Scope-less is not auth-less.
+		it("still requires a valid token (401)", () => {
+			cy.request({
+				method: "GET",
+				url: `${API}/catalog`,
+				failOnStatusCode: false,
+			}).then((response) => {
+				expect(response.status).to.eq(401);
+				expect(response.body.error).to.have.property("code", "unauthorized");
 			});
 		});
 	});

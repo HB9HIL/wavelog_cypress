@@ -35,6 +35,7 @@ describe("API v2 - Clubstation permissions", () => {
 		"qso:read", "qso:write", "qso:delete",
 		"station:read", "station:write", "station:delete",
 		"radio:read", "radio:write", "radio:delete",
+		"logbook:read", "logbook:write", "logbook:delete",
 		"statistic:read",
 		"lookup:read", "club:read", "club:write", "club:delete",
 		"contest:read", "contest:write", "contest:delete",
@@ -62,6 +63,7 @@ describe("API v2 - Clubstation permissions", () => {
 	let adminId;        // user_id of the admin (the acting member)
 	let memberId;       // user_id of a second account, the target of the club writes
 	let clubStationId;  // station location owned by the clubstation
+	let clubLogbookId;  // logbook owned by the clubstation, created by the officer
 	let ownQsoId;       // QSO logged by the admin as the club
 	let foreignQsoId;   // QSO in the same log, but COL_OPERATOR = OTHER_OPERATOR
 	let contestSessionId; // contest session of the club, created by the officer
@@ -344,6 +346,31 @@ describe("API v2 - Clubstation permissions", () => {
 			});
 		});
 
+		// Logbooks are club-wide infrastructure too: Stationsetup is gated at
+		// officer level as a whole, and unlike the location list there is no
+		// exception for the lower levels.
+		it("an officer may create a logbook for the club", () => {
+			cy.request({
+				method: "POST",
+				url: `${API}/logbook`,
+				headers: auth(),
+				body: { name: "Cypress Club Logbook", station_ids: [clubStationId] },
+			}).then((response) => {
+				expect(response.status).to.eq(201);
+				clubLogbookId = response.body.data.id;
+				expect(clubLogbookId).to.be.a("number");
+				expect(response.body.data.station_ids).to.deep.eq([clubStationId]);
+			});
+		});
+
+		it("an officer sees the club's logbooks", () => {
+			cy.request({ url: `${API}/logbook`, headers: auth() }).then((response) => {
+				expect(response.status).to.eq(200);
+				const names = response.body.data.map((l) => l.name);
+				expect(names).to.include("Cypress Club Logbook");
+			});
+		});
+
 		it("an officer may log a QSO under another operator's callsign", () => {
 			// Only an officer can do this; for a member the operator is forced.
 			// This is the row the member must not be able to see or touch later.
@@ -477,6 +504,61 @@ describe("API v2 - Clubstation permissions", () => {
 				cy.request({
 					method: "DELETE",
 					url: `${API}/station/${clubStationId}`,
+					headers: auth(),
+					failOnStatusCode: false,
+				}).then((response) => {
+					expect(response.status).to.eq(403);
+					expect(response.body.error).to.have.property("code", "insufficient_club_permission");
+				});
+			});
+
+			// Logbooks are the one place where the API is stricter than the
+			// location list right above: Stationsetup lets a member reach
+			// list_locations and nothing else, so reading the logbooks is
+			// officer-only as well - not just writing them.
+			it("may not read the logbooks (403)", () => {
+				cy.request({
+					url: `${API}/logbook`,
+					headers: auth(),
+					failOnStatusCode: false,
+				}).then((response) => {
+					expect(response.status).to.eq(403);
+					expect(response.body.error).to.have.property("code", "insufficient_club_permission");
+					expect(response.body.error.details).to.have.property("required_level", 9);
+					expect(response.body.error.details).to.have.property("granted_level", level);
+				});
+			});
+
+			it("may not read a single logbook either (403)", () => {
+				cy.request({
+					url: `${API}/logbook/${clubLogbookId}`,
+					headers: auth(),
+					failOnStatusCode: false,
+				}).then((response) => {
+					expect(response.status).to.eq(403);
+					expect(response.body.error).to.have.property("code", "insufficient_club_permission");
+				});
+			});
+
+			it("may not create a logbook (403)", () => {
+				cy.request({
+					method: "POST",
+					url: `${API}/logbook`,
+					headers: auth(),
+					body: { name: "Member Logbook" },
+					failOnStatusCode: false,
+				}).then((response) => {
+					expect(response.status).to.eq(403);
+					expect(response.body.error).to.have.property("code", "insufficient_club_permission");
+				});
+			});
+
+			// Deleting a logbook unlinks every location in it, which would leave
+			// the club's QSOs orphaned in the UI.
+			it("may not delete a logbook (403)", () => {
+				cy.request({
+					method: "DELETE",
+					url: `${API}/logbook/${clubLogbookId}`,
 					headers: auth(),
 					failOnStatusCode: false,
 				}).then((response) => {
