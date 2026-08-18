@@ -66,6 +66,31 @@ Cypress.expose('clubmember', {
     userlocator: "JN47RI"
 });
 
+// XSS canary used by 18-xss.cy.js. The payload is stored in QSO fields and
+// every page rendering them must escape it. Its three parts each probe a
+// different way the escaping can fail:
+//
+//   canary   plain marker, survives html_escape() unchanged. Lets the scanner
+//            tell "this handler carries QSO data" apart from framework code.
+//   ' and "  one of each, deliberately unbalanced, so breaking out of a JS
+//            string literal leaves a syntax error instead of valid code.
+//   <IMG>    becomes a real element the moment a view echoes the field
+//            without escaping; `image` is what the scanner looks for.
+//
+// Uppercase throughout: the ADIF import upper-cases STATE and SAT_NAME, so a
+// lowercase payload would not survive the round trip byte for byte.
+//
+// `short` exists because COL_IOTA is varchar(10) and MySQL/MariaDB in strict
+// mode rejects an over-long value with an error, which aborts the whole import
+// rather than truncating. It drops the <IMG> - no room - and probes the JS
+// context only, through the same unbalanced quotes.
+Cypress.expose('xss', {
+    canary: "XSCAN",
+    image: "XSSIMG",
+    payload: "XSCAN'\"<IMG SRC=XSSIMG>",
+    short: "XSCAN'\"<>"
+});
+
 
 // Force the English UI for every test. With testIsolation (default since
 // Cypress 12) all cookies are cleared before each test, so the language cookie

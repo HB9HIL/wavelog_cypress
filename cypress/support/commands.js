@@ -119,3 +119,86 @@ Cypress.Commands.add("waitForScpReady", () => {
         expect(scp.totalCallsigns, "SCP callsign count").to.be.greaterThan(0);
     });
 });
+
+// ---------------------------------------------------------------------------
+// XSS scanning (used by 18-xss.cy.js)
+// ---------------------------------------------------------------------------
+
+// Inspect a rendered DOM for traces of the canary payload that escaped its
+// context. Returns an array of human-readable findings; empty means clean.
+//
+// Two checks, because the two output contexts fail in different ways:
+//
+//   HTML context  An unescaped field turns the payload's <IMG SRC=XSSIMG> into
+//                 a real element. Finding that image means some view echoed QSO
+//                 data without html_escape().
+//
+//   JS context    Inline handlers (onclick=, href="javascript:...") only run on
+//                 click, so waiting for an alert would never see them. Instead
+//                 every handler carrying the canary is parsed with Function():
+//                 the payload holds one unbalanced ' and one unbalanced ", so
+//                 breaking out of a string literal leaves invalid JS and throws
+//                 here. Correctly escaped output parses without complaint.
+//
+// Handlers *without* the canary are skipped - those are framework code, not
+// QSO data, and parsing them would only add noise.
+function scanForXss(root) {
+    const xss = Cypress.expose('xss');
+    const issues = [];
+
+    // `i` flag: some views lower-case the field before printing it.
+    if (root.querySelector(`img[src="${xss.image}" i]`)) {
+        issues.push(`payload became a real <img src="${xss.image}"> element (HTML context)`);
+    }
+
+    const snippets = [];
+    root.querySelectorAll("[onclick],[onchange],[onsubmit],[onerror]").forEach((el) => {
+        ["onclick", "onchange", "onsubmit", "onerror"].forEach((attr) => {
+            const code = el.getAttribute(attr);
+            if (code) snippets.push({ where: attr, code: code });
+        });
+    });
+    root.querySelectorAll('a[href^="javascript:" i], area[href^="javascript:" i]').forEach((el) => {
+        snippets.push({
+            where: "href",
+            code: el.getAttribute("href").replace(/^javascript:/i, ""),
+        });
+    });
+    root.querySelectorAll("script:not([src])").forEach((el) => {
+        snippets.push({ where: "inline <script>", code: el.textContent });
+    });
+
+    snippets
+        .filter((s) => s.code.includes(xss.canary))
+        .forEach((s) => {
+            try {
+                new Function(s.code);
+            } catch (e) {
+                issues.push(`${s.where} is not valid JS (payload broke out): ${s.code.slice(0, 200)}`);
+            }
+        });
+
+    return issues;
+}
+
+// Scan the page currently under test. `label` only shows up in the assertion
+// message, so a failing spec names the page without digging through the log.
+// Chai renders an array of strings as "Array(1)", which hides the one thing
+// worth reading, so the findings are joined into the assertion message itself.
+Cypress.Commands.add("checkNoXss", (label) => {
+    cy.document().then((doc) => {
+        const issues = scanForXss(doc.body);
+        expect(issues.join("\n"), `XSS findings on ${label}`).to.equal("");
+    });
+});
+
+// Same scan for an HTML fragment returned by an AJAX endpoint. A <template> is
+// what makes this work: assigning `<tr>`/`<td>` markup to a plain div's
+// innerHTML silently drops the table elements (and with them the onclick
+// attributes we came for), while a template parses any fragment as-is.
+Cypress.Commands.add("checkNoXssInHtml", (html, label) => {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = html;
+    const issues = scanForXss(tpl.content);
+    expect(issues.join("\n"), `XSS findings in ${label}`).to.equal("");
+});

@@ -111,23 +111,34 @@ describe("API v2 - Clubstation permissions", () => {
 		cy.get('#clubswitchModal button[type="submit"]').click();
 	}
 
-	// Enter the clubstation as somebody who may just have logged in for the very
-	// first time. That login is met by the first login wizard, which is
-	// backdrop-static, so the header menu clubSwitch() reaches for is behind an
-	// overlay that cannot be clicked away - but the wizard offers the club
-	// switch itself ("Skip and Open Clubstation"). On a re-run the account is no
-	// longer new, the wizard never appears and the header path is the only one.
-	function enterClubstation(userCallsign, clubCallsign) {
-		cy.wait(2000);
-		cy.get("body").then(($body) => {
-			if ($body.find("#firstLoginWizardModal.show").length) {
-				cy.get("#firstLoginWizardModal").contains("a", clubCallsign).click();
-				cy.get("#clubswitchModal", { timeout: 8000 }).should("be.visible");
-				cy.get('#clubswitchModal button[type="submit"]').click();
-			} else {
-				dismissVersionModal();
-				clubSwitch(userCallsign, clubCallsign);
-			}
+	// The dashboard opens the first login wizard for as long as an account has no
+	// station location at all (Dashboard.php), so for the club member it is not a
+	// one-off: it comes back on every visit and covers the header menu
+	// clubSwitch() reaches for. Giving the account a location once takes the
+	// wizard out of the way for good and leaves the club switch on the same
+	// header path the rest of the suite uses.
+	//
+	// Done over the API because cy.request() ignores the overlay entirely, and
+	// tolerant of an existing location so a re-run against a used instance is a
+	// no-op rather than a failure.
+	function ensureMemberStation() {
+		const env_member = Cypress.expose('clubmember');
+
+		cy.createApiToken("cypress-v2-member-setup", ["station:write"]).then((token) => {
+			cy.request({
+				method: "POST",
+				url: `${API}/station`,
+				headers: { Authorization: "Bearer " + token },
+				body: {
+					name: "Member QTH",
+					callsign: env_member.callsign,
+					gridsquare: env_member.userlocator,
+					dxcc: 287,
+					cq: 14,
+					itu: 28,
+				},
+				failOnStatusCode: false,
+			});
 		});
 	}
 
@@ -1094,7 +1105,13 @@ describe("API v2 - Clubstation permissions", () => {
 			});
 
 			loginAs(env_member.username, env_member.password);
-			enterClubstation(env_member.callsign, env_club.callsign);
+			ensureMemberStation();
+			// The dashboard loaded by the login still carries the wizard - the
+			// location arrived after it was rendered. Reload, so what the header
+			// menu is used on is the version the wizard no longer applies to.
+			cy.visit("/index.php/dashboard");
+			dismissVersionModal();
+			clubSwitch(env_member.callsign, env_club.callsign);
 
 			cy.createApiToken("cypress-v2-member-club", ["club:read", "club:write", "club:delete"])
 				.then((memberClubToken) => {
