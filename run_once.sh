@@ -163,6 +163,7 @@ print_report() {
   echo -e "  PHP:       ${YELLOW}${PHP:-default from Dockerfile}${RESET}"
   echo -e "  Database:  ${YELLOW}$DATABASE${RESET}"
   echo -e "  Browser:   ${YELLOW}$BROWSER${RESET}"
+  echo -e "  Duration:  ${YELLOW}$(printf '%dh %02dm %02ds' $((SECONDS/3600)) $((SECONDS%3600/60)) $((SECONDS%60)))${RESET}"
   echo -e "${CYAN}------------------------------------------------------${RESET}"
   if [ -z "${CYPRESS_EXIT:-}" ]; then
     echo -e "  Cypress:   ${YELLOW}SKIPPED (ONLY=$ONLY)${RESET}"
