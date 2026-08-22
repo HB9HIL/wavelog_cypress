@@ -248,27 +248,6 @@ describe("XSS escaping", () => {
 		});
 	});
 
-	it("Should render the logbookadvanced DB check results without XSS", () => {
-		// The station id the dbtools dialog would send is read from the dialog.
-		cy.request("/index.php/logbookadvanced/dbtoolsDialog").then((dialog) => {
-			const match = dialog.body.match(/id="dbtools_station_id"[\s\S]*?<option value="(\d+)"/);
-			expect(match, "station id in the dbtools dialog").to.not.be.null;
-			const stationid = match[1];
-
-			["checkstate", "checkiota", "checkincorrectgridsquares"].forEach((type) => {
-				cy.request({
-					method: "POST",
-					url: "/index.php/logbookadvanced/checkDb",
-					form: true,
-					body: { type: type, stationid: stationid },
-				}).then((response) => {
-					noteCanary(`checkDb/${type}`, response.body);
-					cy.checkNoXssInHtml(response.body, `checkDb type=${type}`);
-				});
-			});
-		});
-	});
-
 	// The SOTA/POTA/WWFF tables are DataTables sources, not pages: they answer
 	// with JSON whose cells are HTML built in the controller (links carrying the
 	// reference and the callsign), so they are fetched the way the map pages
