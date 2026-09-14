@@ -1541,6 +1541,7 @@ describe("API v2", () => {
 				);
 				expect(qso.dxcc.deleted).to.have.all.keys(
 					"worked",
+					"confirmed",
 					"confirmed_paper",
 					"confirmed_lotw",
 				);
