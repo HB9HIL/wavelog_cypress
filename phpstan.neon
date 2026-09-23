@@ -9,6 +9,10 @@ parameters:
     # The ignore patterns below are broad safety nets; don't fail when one of
     # them happens to match nothing.
     reportUnmatchedIgnoredErrors: false
+    # CodeIgniter's redirect() always ends with exit, so code after it is
+    # unreachable (e.g. no return statement needed after a redirect).
+    earlyTerminatingFunctionCalls:
+        - redirect
     paths:
         - /app/application
     # Make symbols discoverable so they are not reported as "not found":
