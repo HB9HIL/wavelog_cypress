@@ -324,6 +324,7 @@ echo "Wavelog is running on: http://localhost:$((8000 + (${CI_PIPELINE_ID} % 100
 
 # Set the correct base URL for Cypress
 export CYPRESS_baseUrl="http://localhost:$((8000 + (${CI_PIPELINE_ID} % 1000)))/"
+rm -rf cypress/videos cypress/screenshots
 npx cypress run --browser "$BROWSER"
 CYPRESS_EXIT=$?
 

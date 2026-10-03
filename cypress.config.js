@@ -62,6 +62,8 @@ module.exports = defineConfig({
 	// Default 4s is tight in CI: JS libs, XHRs and DB round-trips run under load.
 	// Bumping the implicit assertion/command timeout removes most timing flakes.
 	defaultCommandTimeout: 8000,
+	// Bundled macos-trash is x86_64-only (fails on arm64 without Rosetta); run_once.sh cleans up instead.
+	trashAssetsBeforeRuns: false,
 	e2e: {
 		// baseUrl: "http://localhost:8087/",
 		// Record video for every spec, then keep it only when the spec failed
