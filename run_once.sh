@@ -235,6 +235,7 @@ $config['mqtt_server'] = 'mqtt-broker';
 $config['mqtt_port'] = 1883;
 $config['mqtt_prefix'] = 'wavelog/';
 $config['special_callsign'] = true;
+$config['club_direct'] = true;
 EOF
 
 # For a full run, bring up network/MQTT/DB early so the database initializes
@@ -311,6 +312,7 @@ fi
 docker run -d \
   --name wavelog-web-${CI_PIPELINE_ID} \
   --network wavelog_testnet_${CI_PIPELINE_ID} \
+  -e DOCKER_DEVELOPMENT=true \
   -p $((8000 + (${CI_PIPELINE_ID} % 1000))):80 \
   wavelog-web:${CI_PIPELINE_ID}
 
