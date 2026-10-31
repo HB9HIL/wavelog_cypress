@@ -32,7 +32,7 @@ describe("QRB Calculator (ALT+Q modal)", () => {
 		// The dialog loads the qrbcalc form fields
 		cy.get("#qrbcalc_locator1", { timeout: 10000 }).should("be.visible");
 		cy.get("#qrbcalc_locator2").should("be.visible");
-		cy.get("#button1id").should("be.visible").contains("Calculate");
+		cy.contains("button", "Calculate").should("be.visible");
 	});
 
 	it("Calculates distance and bearing between two locators", () => {
@@ -43,11 +43,12 @@ describe("QRB Calculator (ALT+Q modal)", () => {
 		cy.get("#qrbcalc_locator1").clear().type("JN47");
 		cy.get("#qrbcalc_locator2").clear().type("JO62");
 
-		cy.get("#button1id").click();
+		cy.contains("button", "Calculate").click();
 
 		cy.get(".qrbResult", { timeout: 10000 })
-			.should("contain.text", "distance between")
-			.and("contain.text", "bearing is");
+			.should("contain.text", "Distance")
+			.and("contain.text", "Reverse bearing");
+		cy.get(".qrbResult .qrb-compass").should("be.visible");
 	});
 
 	it("Shows an error for an invalid locator", () => {
@@ -57,7 +58,7 @@ describe("QRB Calculator (ALT+Q modal)", () => {
 		cy.get("#qrbcalc_locator1").clear().type("JN47");
 		cy.get("#qrbcalc_locator2").clear().type("ZZ99");
 
-		cy.get("#button1id").click();
+		cy.contains("button", "Calculate").click();
 
 		// validateLocator() fails -> a danger alert is rendered instead of a result
 		cy.get(".qrbResult .qrbalert")
